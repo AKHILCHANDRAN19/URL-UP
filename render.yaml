@@ -20,7 +20,7 @@ services:
   
   disk:
     name: bot-data
-    mountPath: /app/data
+    mountPath: /app/data  # This creates the /app/data directory
     sizeGB: 1
   
   region: frankfurt

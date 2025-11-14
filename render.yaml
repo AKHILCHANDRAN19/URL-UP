@@ -3,7 +3,15 @@ services:
   type: web
   env: python
   buildCommand: |
-    apt-get update && apt-get install -y aria2
+    # Force update and install with explicit error checking
+    apt-get update --fix-missing
+    apt-get install -y --no-install-recommends aria2
+    # Verify installation
+    if ! command -v aria2c &> /dev/null; then
+      echo "❌ ARIA2 INSTALLATION FAILED!"
+      exit 1
+    fi
+    aria2c --version
     pip install --no-cache-dir -r requirements.txt
   startCommand: python bot.py
   plan: free
@@ -20,7 +28,7 @@ services:
   
   disk:
     name: bot-data
-    mountPath: /app/data  # This creates the /app/data directory
+    mountPath: /app/data
     sizeGB: 1
   
   region: frankfurt

@@ -1,0 +1,28 @@
+services:
+- name: url-uploader-bot
+  type: web
+  env: python
+  buildCommand: pip install -r requirements.txt
+  startCommand: python bot.py
+  plan: free
+  healthCheckPath: /health
+  autoDeploy: true
+  
+  # Environment variables with your credentials
+  envVars:
+  - key: API_ID
+    value: "2819362"
+  - key: API_HASH
+    value: "578ce3d09fadd539544a327c45b55ee4"
+  - key: BOT_TOKEN
+    value: "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
+  
+  # Persistent storage for JSON DB and downloads
+  disk:
+    name: bot-data
+    mountPath: /app/data
+    sizeGB: 1  # Free plan limit
+  
+  # Runtime settings
+  region: frankfurt
+  branch: main

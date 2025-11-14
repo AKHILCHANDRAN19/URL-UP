@@ -18,7 +18,7 @@ from pyrogram.errors import MessageNotModified, FloodWait
 from PIL import Image
 
 # ============================================
-# CONFIGURATION - RENDER.COM OPTIMIZED
+# CONFIGURATION - FIXED FOR RENDER.COM
 # ============================================
 API_ID = 2819362
 API_HASH = "578ce3d09fadd539544a327c45b55ee4"
@@ -26,7 +26,7 @@ BOT_TOKEN = "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
 
 # Bot settings
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-BASE_DATA_DIR = "/app/data" if os.path.exists("/app") else os.getcwd()
+BASE_DATA_DIR = "/app/data" if os.path.exists("/app") else os.path.expanduser("~")
 DOWNLOAD_DIR = os.path.join(BASE_DATA_DIR, "downloads")
 JSON_DB_PATH = os.path.join(BASE_DATA_DIR, "bot_data.json")
 LOG_FILE_PATH = os.path.join(BASE_DATA_DIR, "bot.log")
@@ -34,18 +34,21 @@ LOG_FILE_PATH = os.path.join(BASE_DATA_DIR, "bot.log")
 # DEFAULT THUMBNAIL
 DEFAULT_THUMB_ID = "AgACAgUAAxkBAAE9vJdpFKHL4lIezMqiAhL4U86UBU9HFAACcg5rGxoHoVRR8Xe3Z3RrUwEAAwIAA20AAzYE"
 
-# ARIA2 AVAILABILITY CHECK
+# Force ARIA2 check with explicit path
 ARIA2_AVAILABLE = False
 try:
-    result = subprocess.run(["aria2c", "--version"], capture_output=True, timeout=5)
-    ARIA2_AVAILABLE = result.returncode == 0
-    print(f"✅ Aria2 available: {ARIA2_AVAILABLE}")
-except:
-    print("❌ Aria2 not available, using fallback downloader")
+    # Check in common locations
+    for path in ["/usr/bin/aria2c", "/usr/local/bin/aria2c", "aria2c"]:
+        if subprocess.run([path, "--version"], capture_output=True, timeout=5, stdin=subprocess.DEVNULL).returncode == 0:
+            ARIA2_AVAILABLE = True
+            print(f"✅ Aria2 found at: {path}")
+            break
+except Exception as e:
+    print(f"❌ Aria2 check failed: {e}")
 
-# Create directories
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-os.makedirs(os.path.dirname(JSON_DB_PATH), exist_ok=True)
+# Create directories with proper permissions
+os.makedirs(DOWNLOAD_DIR, exist_ok=True, mode=0o755)
+os.makedirs(os.path.dirname(JSON_DB_PATH), exist_ok=True, mode=0o755)
 
 # ============================================
 # JSON STORAGE
@@ -56,20 +59,20 @@ class JsonStorage:
         self.data = self.load()
     
     def load(self) -> Dict[str, Any]:
-        if os.path.exists(self.filepath):
-            try:
+        try:
+            if os.path.exists(self.filepath):
                 with open(self.filepath, 'r') as f:
                     return json.load(f)
-            except:
-                pass
+        except Exception as e:
+            logging.error(f"JSON load error: {e}")
         return {"thumbnails": {}, "settings": {}, "stats": {"total_downloads": 0}}
     
     def save(self):
         try:
             with open(self.filepath, 'w') as f:
                 json.dump(self.data, f, indent=2)
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"JSON save error: {e}")
     
     def get_thumbnail(self, user_id: int) -> Optional[str]:
         return self.data["thumbnails"].get(str(user_id))
@@ -84,8 +87,7 @@ class JsonStorage:
             self.save()
     
     def get_setting(self, user_id: int, key: str, default: Any = True) -> Any:
-        user_settings = self.data["settings"].get(str(user_id), {})
-        return user_settings.get(key, default)
+        return self.data["settings"].get(str(user_id), {}).get(key, default)
     
     def set_setting(self, user_id: int, key: str, value: Any):
         if str(user_id) not in self.data["settings"]:
@@ -118,8 +120,8 @@ def health():
 def run_web_server():
     try:
         app.run(host='0.0.0.0', port=80, debug=False, use_reloader=False)
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"Web server error: {e}")
 
 # ============================================
 # BOT INITIALIZATION
@@ -175,10 +177,7 @@ def clean_filename(url_or_name: str) -> str:
         path = re.sub(r'[^\w\s\-_\.\(\)]', ' ', path)
         
         if not re.search(r'\.(mkv|mp4|avi|mov|webm)$', path, re.IGNORECASE):
-            if any(kw in path.lower() for kw in ['720p', '1080p', '2160p', '4k', 'x264', 'x265', 'dvd', 'hq']):
-                path += '.mkv'
-            else:
-                path += '.mp4'
+            path += '.mkv' if any(kw in path.lower() for kw in ['720p', '1080p', '2160p', '4k', 'x264', 'x265']) else '.mp4'
         
         return ' '.join(path.split())[:200]
     except:
@@ -191,29 +190,24 @@ def is_valid_url(url: str) -> bool:
             return False
         
         if any(domain in url for domain in [
-            'onrender.com/download/', 'file.link/', 't.me/', 'seedr.cc/',
-            'fento.me/', 'gofile.io/', 'pixeldrain.com/', 'workers.dev/',
-            'github.com/', 'gitlab.com/', 'animeflix.live/', 'filebin.net/', 'transfer.sh/'
+            'seedr.cc', 'file.link/', 't.me/', 'gofile.io/', 'pixeldrain.com/',
+            'workers.dev/', 'github.com/', 'gitlab.com/', 'onrender.com/',
+            'filebin.net/', 'transfer.sh/', 'animeflix.live/'
         ]):
             return True
             
         if not (url.startswith('http://') or url.startswith('https://')):
             return False
             
-        if not re.search(r'\.[a-z]{2,6}', url, re.IGNORECASE):
-            return False
-            
-        return True
+        return bool(re.search(r'\.[a-z]{2,6}', url, re.IGNORECASE))
     except:
         return False
 
 def is_youtube_url(url: str) -> bool:
     """Check if URL is a YouTube video"""
     try:
-        youtube_patterns = [
-            r'youtube\.com/watch\?v=', r'youtu\.be/', r'youtube\.com/shorts/', r'youtube\.com/embed/'
-        ]
-        return any(re.search(pattern, url, re.IGNORECASE) for pattern in youtube_patterns)
+        patterns = [r'youtube\.com/watch\?v=', r'youtu\.be/', r'youtube\.com/shorts/', r'youtube\.com/embed/']
+        return any(re.search(p, url, re.IGNORECASE) for p in patterns)
     except:
         return False
 
@@ -235,45 +229,88 @@ def parse_size(size_str: str) -> int:
         return 0
 
 # ============================================
-# THUMBNAIL HANDLING
+# THUMBNAIL HANDLING - FIXED
 # ============================================
 async def download_thumbnail(thumb_id: str, filepath: str) -> bool:
-    """Download thumbnail file"""
+    """Download and validate thumbnail file"""
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        # Download thumbnail
         await bot.download_media(thumb_id, file_name=filepath)
-        return os.path.exists(filepath) and os.path.getsize(filepath) > 0
-    except:
+        
+        # Validate and fix thumbnail
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+            # Open and convert to ensure it's a valid JPEG
+            with Image.open(filepath) as img:
+                # Convert to RGB if necessary
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Resize if too large (Telegram limit: 320x320)
+                if img.width > 320 or img.height > 320:
+                    img.thumbnail((320, 320), Image.Resampling.LANCZOS)
+                
+                # Save as JPEG with quality 85
+                img.save(filepath, 'JPEG', quality=85, optimize=True)
+            
+            # Check file size (Telegram limit: 200KB)
+            if os.path.getsize(filepath) > 200 * 1024:
+                # Compress further if needed
+                with Image.open(filepath) as img:
+                    img.save(filepath, 'JPEG', quality=70, optimize=True)
+            
+            logger.info(f"✅ Thumbnail validated: {filepath} ({os.path.getsize(filepath)} bytes)")
+            return True
+        
+        return False
+    except Exception as e:
+        logger.error(f"Thumbnail download/validation error: {e}")
+        # Remove invalid file
+        if os.path.exists(filepath):
+            os.remove(filepath)
         return False
 
 async def get_user_thumbnail_path(user_id: int) -> Optional[str]:
-    """Get user's thumbnail path"""
-    thumb_id = json_db.get_thumbnail(user_id) or DEFAULT_THUMB_ID
-    if not thumb_id:
-        return None
-    thumb_path = os.path.join(DOWNLOAD_DIR, f"{user_id}_thumb.jpg")
-    if not os.path.exists(thumb_path):
-        success = await download_thumbnail(thumb_id, thumb_path)
-        if not success and thumb_id != DEFAULT_THUMB_ID:
+    """Get user's thumbnail path with fallback to default"""
+    # Try user thumbnail first
+    thumb_id = json_db.get_thumbnail(user_id)
+    thumb_path = None
+    
+    if thumb_id:
+        thumb_path = os.path.join(DOWNLOAD_DIR, f"{user_id}_thumb.jpg")
+        if not os.path.exists(thumb_path):
+            success = await download_thumbnail(thumb_id, thumb_path)
+            if not success:
+                thumb_path = None
+    
+    # Fallback to default thumbnail
+    if not thumb_path:
+        thumb_path = os.path.join(DOWNLOAD_DIR, "default_thumb.jpg")
+        if not os.path.exists(thumb_path):
             success = await download_thumbnail(DEFAULT_THUMB_ID, thumb_path)
-        if not success:
-            return None
+            if not success:
+                return None
+    
     return thumb_path if os.path.exists(thumb_path) else None
 
 # ============================================
 # FALLBACK DOWNLOADER (PURE PYTHON)
 # ============================================
 async def download_with_fallback(url: str, filepath: str, message: Message, filename: str) -> bool:
-    """Fallback downloader using aiohttp when aria2 is unavailable"""
+    """Fallback downloader using aiohttp"""
     try:
         clean_name = clean_filename(filename)
         final_path = os.path.join(os.path.dirname(filepath), clean_name)
         
-        await message.edit_text(f"⚠️ Aria2 unavailable, using standard downloader...\n<b>{clean_name}</b>")
-        logger.warning(f"Using fallback downloader for: {url}")
+        await message.edit_text(f"⚠️ Using standard downloader...\n<b>{clean_name}</b>\nSpeed will be slower than aria2")
+        logger.warning(f"Fallback download: {url}")
         
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3600)) as response:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3600)) as response:
                 if response.status != 200:
                     await message.edit_text(f"❌ HTTP Error: {response.status}")
                     return False
@@ -291,7 +328,6 @@ async def download_with_fallback(url: str, filepath: str, message: Message, file
                         f.write(chunk)
                         downloaded += len(chunk)
                         
-                        # Update progress every 2 seconds
                         if time.time() - last_update > 2:
                             await progress_callback(downloaded, total_size or 1, message, start_time, clean_name)
                             last_update = time.time()
@@ -304,7 +340,7 @@ async def download_with_fallback(url: str, filepath: str, message: Message, file
             return False
             
     except Exception as e:
-        logger.error(f"❌ Fallback download error: {str(e)}", exc_info=True)
+        logger.error(f"❌ Fallback error: {str(e)}", exc_info=True)
         await message.edit_text(f"❌ Download error: {str(e)}")
         return False
 
@@ -399,8 +435,7 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
             
     except Exception as e:
         logger.error(f"❌ Aria2 error: {str(e)}", exc_info=True)
-        await message.edit_text(f"❌ Aria2 error: {str(e)}")
-        return False
+        return await download_with_fallback(url, filepath, message, filename)
 
 # ============================================
 # YOUTUBE FUNCTIONS
@@ -530,16 +565,16 @@ async def progress_callback(current: int, total: int, message: Message, start_ti
         filled = int(bar_length * progress)
         bar = "▪" * filled + "▫" * (bar_length - filled)
         
-        action = "Uploading" if is_upload else "Downloading"
+        action = "📤 Uploading" if is_upload else "📥 Downloading"
         
         text = (
             f"{action}: <b>{percent:.2f}%</b>\n"
             f"[{bar}]\n"
             f"<code>{sizeof_fmt(current)} of {sizeof_fmt(total)}</code>\n"
-            f"Speed: <code>{sizeof_fmt(speed)}/sec</code>\n"
-            f"ETA: <code>{eta}</code>\n\n"
+            f"⚡ Speed: <code>{sizeof_fmt(speed)}/sec</code>\n"
+            f"⏳ ETA: <code>{eta}</code>\n\n"
             f"📁 <b>{filename}</b>\n\n"
-            f"Thanks for using 👑"
+            f"🤖 Bot by @YourUsername"
         )
         
         if int(elapsed) % 2 == 0:
@@ -554,19 +589,25 @@ async def progress_callback(current: int, total: int, message: Message, start_ti
         logger.error(f"Progress callback error: {e}")
 
 # ============================================
-# UPLOAD FUNCTION
+# UPLOAD FUNCTION - FIXED THUMBNAIL
 # ============================================
 async def upload_file(filepath: str, filename: str, message: Message, status_msg: Message):
-    """Upload file with thumbnail"""
+    """Upload file with thumbnail - FIXED"""
     try:
         start_time = time.time()
         file_size = os.path.getsize(filepath)
         user_id = message.from_user.id
         
         upload_as_doc = json_db.get_setting(user_id, "upload_as_doc", True)
-        thumb_path = await get_user_thumbnail_path(user_id)
-        clean_name = clean_filename(filename)
         
+        # CRITICAL FIX: Get thumbnail BEFORE upload
+        thumb_path = await get_user_thumbnail_path(user_id)
+        if thumb_path:
+            logger.info(f"✅ Using thumbnail: {thumb_path} ({os.path.getsize(thumb_path)} bytes)")
+        else:
+            logger.warning("❌ No thumbnail available")
+        
+        clean_name = clean_filename(filename)
         lower_name = clean_name.lower()
         is_video = lower_name.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm'))
         is_audio = lower_name.endswith(('.mp3', '.wav', '.flac', '.m4a', '.ogg', '.opus'))
@@ -574,6 +615,7 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         
         await status_msg.edit_text(f"📤 Uploading...\n<b>{clean_name}</b>")
         
+        # Upload with thumbnail
         if is_image:
             await bot.send_photo(
                 chat_id=message.chat.id,
@@ -590,12 +632,13 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
                 progress_args=(status_msg, start_time, clean_name, True)
             )
         elif is_video and not upload_as_doc:
+            # CRITICAL: For videos, thumbnail is MANDATORY for preview
             await bot.send_video(
                 chat_id=message.chat.id,
                 video=filepath,
                 caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}",
                 supports_streaming=True,
-                thumb=thumb_path,
+                thumb=thumb_path,  # This enables thumbnail preview
                 progress=progress_callback,
                 progress_args=(status_msg, start_time, clean_name, True)
             )
@@ -615,6 +658,7 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         except:
             pass
         
+        # Clean up
         if os.path.exists(filepath):
             os.remove(filepath)
             logger.info(f"Cleaned up: {filepath}")
@@ -631,20 +675,19 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
 @bot.on_message(filters.command(["start", "help"]) & filters.private)
 async def start_help_command(_, message: Message):
     """Handle /start and /help"""
-    aria_status = "✅ Aria2 Active" if ARIA2_AVAILABLE else "⚠️ Aria2 Unavailable (Using Fallback)"
+    aria_status = "✅ Active" if ARIA2_AVAILABLE else "⚠️ Unavailable (Slow Mode)"
     text = (
         "👑 <b>ARIA2 POWERED BOT</b>\n\n"
         f"<b>Status:</b> {aria_status}\n\n"
         "<b>Features:</b>\n"
         "• ⚡ Ultra-fast downloads (aria2c)\n"
-        "• 16 connections per server\n"
-        "• Custom thumbnails\n"
+        "• Custom thumbnails (JPEG format)\n"
         "• Clean filenames\n"
         "• Progress tracking\n\n"
         "<b>Commands:</b>\n"
         "/stats - Bot statistics\n"
         "/settings - Configure settings\n"
-        "Send any URL to start!\n\n"
+        "/thumb - Set custom thumbnail\n\n"
         "<b>Supported URLs:</b>\n"
         "• Direct links (seedr.cc, file.link, etc.)\n"
         "• YouTube videos\n"
@@ -682,7 +725,8 @@ async def stats_command(_, message: Message):
             f"├ <b>CPU:</b> {cpu}%\n"
             f"├ <b>RAM:</b> {ram}%\n"
             f"└ <b>Disk:</b> {disk}%\n\n"
-            f"<b>Aria2 Status:</b> {'✅ Available' if ARIA2_AVAILABLE else '❌ Unavailable'}"
+            f"<b>Aria2:</b> {'✅ Available' if ARIA2_AVAILABLE else '❌ Unavailable'}\n"
+            f"<b>Thumbnail:</b> ✅ Auto-applied"
         )
         await message.reply_text(text)
     except Exception as e:
@@ -710,15 +754,40 @@ async def settings_command(_, message: Message):
         logger.error(f"Settings error: {e}")
         await message.reply_text("❌ Error loading settings")
 
+@bot.on_message(filters.command("thumb") & filters.private)
+async def thumb_info(_, message: Message):
+    """Info about setting thumbnail"""
+    await message.reply_text(
+        "📸 <b>Set Custom Thumbnail</b>\n\n"
+        "Just send any photo to this bot and it will be used as thumbnail for all your video/file uploads!\n\n"
+        "Requirements:\n"
+        "• JPEG format (auto-converted)\n"
+       • Max size: 200KB (auto-compressed)\n"
+        "• Resolution: 320x320 max (auto-resized)"
+    )
+
 @bot.on_message(filters.photo & filters.private)
 async def save_thumbnail(_, message: Message):
-    """Save custom thumbnail"""
+    """Save custom thumbnail - ENHANCED"""
     try:
         user_id = message.from_user.id
         file_id = message.photo.file_id
         
+        # Validate it's a photo
+        if not message.photo:
+            await message.reply_text("❌ Please send a valid photo!")
+            return
+        
         json_db.set_thumbnail(user_id, file_id)
-        await message.reply_text("✅ Thumbnail saved!\n\nWill be used for all video/file uploads.")
+        
+        # Test download and validate
+        test_path = os.path.join(DOWNLOAD_DIR, f"{user_id}_temp_thumb.jpg")
+        if await download_thumbnail(file_id, test_path):
+            os.remove(test_path)
+            await message.reply_text("✅ Thumbnail saved and validated!\n\nWill be used for all video/file uploads.")
+        else:
+            await message.reply_text("⚠️ Thumbnail saved but may be invalid. Please send a JPEG image.")
+            
     except Exception as e:
         logger.error(f"Thumbnail save error: {e}")
         await message.reply_text("❌ Failed to save thumbnail")
@@ -777,7 +846,8 @@ async def handle_direct_url(_, message: Message, url: str, custom_name: Optional
         clean_name = clean_filename(filename)
         
         # Show filename
-        await status_msg.edit_text(f"📥 Downloading...\n<b>{clean_name}</b>\n{'⚡ Using Aria2' if ARIA2_AVAILABLE else '🐌 Using Fallback'}")
+        downloader_name = "⚡ Aria2" if ARIA2_AVAILABLE else "🐌 Standard"
+        await status_msg.edit_text(f"📥 Downloading...\n<b>{clean_name}</b>\nDownloader: {downloader_name}")
         
         # Use ARIA2 or fallback
         filepath = os.path.join(DOWNLOAD_DIR, clean_name)
@@ -843,7 +913,7 @@ async def handle_callback(_, callback_query: CallbackQuery):
         elif data == "stats":
             await stats_command(_, callback_query.message)
         elif data == "settings":
-            await settings_command(_, callback_query.message)
+            await settings_command(_, callback queue.message)
         elif data == "close":
             try:
                 await callback_query.message.delete()

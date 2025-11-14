@@ -1,22 +1,21 @@
 # ===============================================================
-# Render Blueprint for the URL Uploader Bot (CORRECTED)
+# Render Blueprint for URL Uploader Bot (DOCKER - FINAL FIX)
 # ===============================================================
 services:
 - name: url-uploader-bot
   type: web
-  env: python
+  env: docker  # <-- CRITICAL CHANGE: Tell Render to use Docker
   plan: free
   region: frankfurt
 
-  buildCommand: |
-    apt-get update && apt-get install -y aria2 && pip install -r requirements.txt
-  
-  startCommand: python bot.py
-
+  # Health check path remains the same
   healthCheckPath: /health
+  
+  # Auto-deploy on push to the main branch
   autoDeploy: true
   branch: main
 
+  # Your environment variables
   envVars:
   - key: API_ID
     value: "2819362"
@@ -25,9 +24,9 @@ services:
   - key: BOT_TOKEN
     value: "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
   
-  # --- CORRECTED DISK PATH ---
-  # This mounts the disk as a 'data' folder inside your project directory.
+  # --- Persistent Disk ---
+  # The mount path is now an absolute path inside the Docker container's filesystem
   disk:
     name: bot-data
-    mountPath: ./data  # <-- THE CRITICAL FIX IS HERE
+    mountPath: /app/data
     sizeGB: 1

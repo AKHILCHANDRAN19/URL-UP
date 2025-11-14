@@ -12,11 +12,12 @@ import urllib.parse
 from typing import Optional, Dict, Any
 from flask import Flask
 from pyrogram import Client, filters, enums
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Thumbnail
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import MessageNotModified, FloodWait
+from PIL import Image  # FIXED: PILLOW IMPORT ADDED
 
 # ============================================
-# CONFIGURATION - RENDER COMPATIBLE
+# CONFIGURATION
 # ============================================
 API_ID = 2819362
 API_HASH = "578ce3d09fadd539544a327c45b55ee4"
@@ -24,10 +25,9 @@ BOT_TOKEN = "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
 
 # Bot settings
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunks - INCREASED FOR SPEED
+CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunks
 DOWNLOAD_DIR = "./downloads"
 JSON_DB_PATH = "./bot_data.json"
-YTDL_PATH = "./yt-dlp"
 
 # DEFAULT THUMBNAIL
 DEFAULT_THUMB_ID = "AgACAgUAAxkBAAE9vJdpFKHL4lIezMqiAhL4U86UBU9HFAACcg5rGxoHoVRR8Xe3Z3RrUwEAAwIAA20AAzYE"
@@ -118,7 +118,7 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     in_memory=True,
-    max_concurrent_transmissions=5,  # INCREASED
+    max_concurrent_transmissions=10,
     parse_mode=enums.ParseMode.HTML,
     sleep_threshold=30
 )
@@ -137,7 +137,7 @@ logger = logging.getLogger(__name__)
 # HELPER FUNCTIONS
 # ============================================
 def sizeof_fmt(num: float, suffix: str = "B") -> str:
-    """Format file size in human readable format"""
+    """Format file size"""
     try:
         for unit in ["", "K", "M", "G", "T"]:
             if abs(num) < 1024.0:
@@ -147,56 +147,56 @@ def sizeof_fmt(num: float, suffix: str = "B") -> str:
     except:
         return "Unknown"
 
-def clean_filename(filename: str) -> str:
-    """CLEAN MESSY FILENAMES LIKE: www.1TamilMV.best_20-_20The_20Pet_20Detective..."""
+def clean_filename(url_or_name: str) -> str:
+    """Clean messy filenames"""
     try:
-        # Remove URL prefixes
-        filename = re.sub(r'^https?://[^/]+/', '', filename)
+        if url_or_name.startswith('http'):
+            parsed = urllib.parse.urlparse(url_or_name)
+            path = urllib.parse.unquote(parsed.path.split('/')[-1])
+            if not path:
+                path = "video.mkv"
+        else:
+            path = url_or_name
         
-        # Handle URL encoded spaces (%20) and other patterns
-        filename = filename.replace('_20_', ' ').replace('_20', ' ').replace('%20', ' ')
+        path = path.replace('_20_', ' ').replace('_20', ' ').replace('%20', ' ')
+        path = re.sub(r'^(www\.)?[^.]+\.(com|best|cc|cab|wtf|eu|in|nl)[-_\.]', '', path)
+        path = re.sub(r'[^\w\s\-_\.\(\)]', ' ', path)
         
-        # Remove unwanted patterns
-        filename = re.sub(r'www\.[^.]+\.(com|best|cc|io|in)[-_\.]', '', filename)
-        
-        # Clean up multiple spaces
-        filename = ' '.join(filename.split())
-        
-        # Remove trailing numbers and dashes
-        filename = re.sub(r'[-_\s]+\d+$', '', filename)
-        
-        # Fix extensions - prioritize common video extensions
-        if not re.search(r'\.(mkv|mp4|avi|mov|webm)$', filename, re.IGNORECASE):
-            # If it has video-related keywords, assume .mkv
-            if any(keyword in filename.lower() for keyword in ['720p', '1080p', 'x264', 'x265', 'dvd', 'hd']):
-                filename += '.mkv'
+        if not re.search(r'\.(mkv|mp4|avi|mov|webm)$', path, re.IGNORECASE):
+            if any(kw in path.lower() for kw in ['720p', '1080p', '2160p', '4k', 'x264', 'x265', 'dvd', 'hq']):
+                path += '.mkv'
             else:
-                filename += '.mp4'
+                path += '.mp4'
         
-        # Capitalize first letters for readability
-        filename = ' '.join(word.capitalize() if word.islower() else word for word in filename.split())
-        
-        # Limit length
-        return filename[:200]
-    except Exception as e:
-        logger.error(f"Filename cleaning error: {e}")
+        return ' '.join(path.split())[:200]
+    except:
         return "video.mkv"
 
 def is_valid_url(url: str) -> bool:
-    """Check if URL is valid - SUPPORTS FILE-TO-LINK REDIRECTORS"""
+    """Check if URL is valid - SUPPORTS FILE-TO-LINK BOTS"""
     try:
         if not url or len(url) < 10:
             return False
         
-        # Support for redirector URLs like file-to-link bots
-        if any(domain in url for domain in ['onrender.com/download/', 'file.link/', 't.me/']):
+        # SUPPORT: All file-to-link bot URLs
+        if any(domain in url for domain in [
+            'onrender.com/download/',
+            'file.link/',
+            't.me/',
+            'seedr.cc/',
+            'fento.me/',
+            'gofile.io/',
+            'pixeldrain.com/',
+            'workers.dev/',
+            'github.com/',
+            'gitlab.com/'
+        ]):
             return True
             
-        # Standard URL validation
         if not (url.startswith('http://') or url.startswith('https://')):
             return False
             
-        if '.' not in url[8:]:
+        if not re.search(r'\.[a-z]{2,6}', url, re.IGNORECASE):
             return False
             
         return True
@@ -217,114 +217,159 @@ def is_youtube_url(url: str) -> bool:
         return False
 
 # ============================================
-# PROGRESS BAR - CUSTOM FORMAT
+# ARIA2 DOWNLOAD FUNCTION - HIGH SPEED
 # ============================================
-async def progress_callback(current: int, total: int, message: Message, start_time: float, filename: str, is_upload: bool = False):
-    """CUSTOM PROGRESS BAR - Matches user's format exactly"""
+async def download_with_aria2(url: str, filepath: str, message: Message, filename: str) -> bool:
+    """DOWNLOAD USING ARIA2C - MAXIMUM SPEED"""
     try:
-        now = time.time()
-        elapsed = now - start_time
-        if elapsed < 0.1:
-            return
-            
-        speed = current / elapsed if elapsed > 0 else 0
+        clean_name = clean_filename(filename)
+        final_path = os.path.join(os.path.dirname(filepath), clean_name)
         
-        progress = min(current / total, 1.0)
-        percent = progress * 100
+        cmd = [
+            "aria2c",
+            "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "--continue=true",
+            "--summary-interval=1",
+            f"--dir={os.path.dirname(final_path)}",
+            f"--out={os.path.basename(final_path)}",
+            "--console-log-level=error",
+            "--max-connection-per-server=16",
+            "--split=16",
+            "--min-split-size=1M",
+            "--max-concurrent-downloads=8",
+            "--max-tries=10",
+            "--retry-wait=5",
+            "--timeout=60",
+            "--check-certificate=false",
+            "--async-dns=false",
+            "--seed-time=0",
+            "--bt-enable-lpd=false",
+            "--bt-max-peers=0",
+            url
+        ]
         
-        if progress > 0:
-            eta_seconds = (total - current) / speed if speed > 0 else 0
-            minutes, seconds = divmod(int(eta_seconds), 60)
-            eta = f"{minutes}m, {seconds}s" if minutes > 0 else f"{seconds}s"
-        else:
-            eta = "N/A"
-        
-        # Progress bar with solid squares
-        bar_length = 10
-        filled = int(bar_length * progress)
-        bar = "▪" * filled + "▫" * (bar_length - filled)
-        
-        action = "Uploading" if is_upload else "Downloading"
-        
-        text = (
-            f"{action}: <b>{percent:.2f}%</b>\n"
-            f"[{bar}]\n"
-            f"<code>{sizeof_fmt(current)} of {sizeof_fmt(total)}</code>\n"
-            f"Speed: <code>{sizeof_fmt(speed)}/sec</code>\n"
-            f"ETA: <code>{eta}</code>\n\n"
-            f"📁 <b>{filename}</b>\n\n"
-            f"Thanks for using 👑"
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
         
-        if int(elapsed) % 2 == 0:  # Update every 2 seconds
-            try:
-                await message.edit_text(text)
-            except MessageNotModified:
-                pass
-            except:
-                pass
-            
-    except:
-        pass
-
-# ============================================
-# DOWNLOAD FUNCTIONS
-# ============================================
-async def download_file(url: str, filepath: str, message: Message, filename: str) -> bool:
-    """Download file with redirect support - INCREASED SPEED"""
-    try:
-        # Clean filename first
-        clean_name = clean_filename(filename)
-        filepath = os.path.join(os.path.dirname(filepath), clean_name)
+        start_time = time.time()
+        last_update = 0
         
-        async with aiohttp.ClientSession() as session:
-            # Allow redirects and increase timeout
-            timeout = aiohttp.ClientTimeout(total=7200, connect=60, sock_read=300)
-            async with session.get(url, timeout=timeout, allow_redirects=True) as response:
-                if response.status not in [200, 206]:
-                    await message.edit_text(f"❌ Download failed! Status: {response.status}")
-                    return False
-                
-                # Get final URL after redirects
-                final_url = str(response.url)
-                
-                content_length = response.headers.get('Content-Length')
-                if content_length:
-                    total_size = int(content_length)
-                    if total_size > MAX_FILE_SIZE:
-                        await message.edit_text(f"❌ File too large! {sizeof_fmt(total_size)}")
-                        return False
-                else:
-                    total_size = 0
-                
-                downloaded = 0
-                start_time = time.time()
-                
-                with open(filepath, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if total_size > 0:
-                                await progress_callback(downloaded, total_size, message, start_time, clean_name)
-                
-                return True
-    
-    except asyncio.TimeoutError:
-        await message.edit_text("❌ Download timeout!")
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            
+            line = line.decode().strip()
+            
+            if "DL:" in line and "%" in line:
+                try:
+                    parts = line.split()
+                    percent = 0
+                    downloaded = 0
+                    total = 0
+                    speed = 0
+                    
+                    for i, part in enumerate(parts):
+                        if part.endswith('%'):
+                            percent = float(part.strip('%'))
+                        elif 'MiB' in part or 'GiB' in part:
+                            if '/' in part:
+                                downloaded_str, total_str = part.split('/')
+                                downloaded = parse_size(downloaded_str)
+                                total = parse_size(total_str)
+                        elif 'MiB/s' in part or 'GiB/s' in part:
+                            speed = parse_size(part.replace('/s', ''))
+                    
+                    if time.time() - last_update > 1:
+                        await progress_callback(downloaded, total, message, start_time, clean_name)
+                        last_update = time.time()
+                        
+                except:
+                    pass
+        
+        await process.wait()
+        
+        if process.returncode == 0 and os.path.exists(final_path):
+            return True
+        else:
+            _, stderr = await process.communicate()
+            error = stderr.decode()[:200]
+            await message.edit_text(f"❌ Aria2 download failed!\n<code>{error}</code>")
+            return False
+            
     except Exception as e:
-        await message.edit_text(f"❌ Download error: {str(e)}")
-    
-    return False
+        await message.edit_text(f"❌ Aria2 error: {str(e)}")
+        return False
 
+def parse_size(size_str: str) -> int:
+    """Parse size string like '1.2GiB' to bytes"""
+    try:
+        size_str = size_str.strip()
+        if not size_str:
+            return 0
+            
+        match = re.match(r'([\d\.]+)\s*([KMGT]i?B)?', size_str)
+        if not match:
+            return 0
+            
+        number = float(match.group(1))
+        unit = match.group(2) or 'B'
+        
+        multipliers = {
+            'B': 1,
+            'KB': 1024,
+            'MB': 1024**2,
+            'GB': 1024**3,
+            'TB': 1024**4,
+            'KiB': 1024,
+            'MiB': 1024**2,
+            'GiB': 1024**3,
+            'TiB': 1024**4
+        }
+        
+        return int(number * multipliers.get(unit, 1))
+    except:
+        return 0
+
+# ============================================
+# THUMBNAIL HANDLING
+# ============================================
+async def download_thumbnail(thumb_id: str, filepath: str) -> bool:
+    """Download thumbnail file"""
+    try:
+        await bot.download_media(thumb_id, file_name=filepath)
+        return os.path.exists(filepath)
+    except:
+        return False
+
+async def get_user_thumbnail_path(user_id: int) -> Optional[str]:
+    """Get user's thumbnail path - FIXED: DEFINED HERE"""
+    thumb_id = json_db.get_thumbnail(user_id) or DEFAULT_THUMB_ID
+    if not thumb_id:
+        return None
+    
+    thumb_path = os.path.join(DOWNLOAD_DIR, f"{user_id}_thumb.jpg")
+    
+    if not os.path.exists(thumb_path):
+        success = await download_thumbnail(thumb_id, thumb_path)
+        if not success:
+            return None
+    
+    return thumb_path if os.path.exists(thumb_path) else None
+
+# ============================================
+# YOUTUBE FUNCTIONS
+# ============================================
 async def download_youtube_video(url: str, format_id: str, filepath: str, message: Message) -> bool:
-    """Download YouTube video - INCREASED SPEED"""
+    """Download YouTube video"""
     try:
         await message.edit_text("📥 Starting YouTube download...")
         
-        # Clean filename
         clean_name = clean_filename(os.path.basename(filepath))
-        filepath = os.path.join(os.path.dirname(filepath), clean_name)
+        final_path = os.path.join(os.path.dirname(filepath), clean_name)
         
         cmd = [
             "yt-dlp",
@@ -334,7 +379,7 @@ async def download_youtube_video(url: str, format_id: str, filepath: str, messag
             "--no-check-certificate",
             "--no-playlist",
             "--no-cache-dir",
-            "-o", filepath,
+            "-o", final_path,
             url
         ]
         
@@ -368,10 +413,7 @@ async def download_youtube_video(url: str, format_id: str, filepath: str, messag
         
         await process.wait()
         
-        if process.returncode == 0 and os.path.exists(filepath):
-            # Rename to clean filename
-            final_path = os.path.join(os.path.dirname(filepath), clean_filename(clean_name))
-            os.rename(filepath, final_path)
+        if process.returncode == 0 and os.path.exists(final_path):
             return True
         else:
             _, stderr = await process.communicate()
@@ -435,10 +477,58 @@ async def get_youtube_formats(url: str, message: Message) -> Optional[list]:
         return None
 
 # ============================================
-# UPLOAD FUNCTION - FIXED: THUMBNAILS ATTACHED PROPERLY
+# PROGRESS BAR - CUSTOM FORMAT
+# ============================================
+async def progress_callback(current: int, total: int, message: Message, start_time: float, filename: str, is_upload: bool = False):
+    """CUSTOM PROGRESS BAR"""
+    try:
+        now = time.time()
+        elapsed = now - start_time
+        if elapsed < 0.1:
+            return
+            
+        speed = current / elapsed if elapsed > 0 else 0
+        
+        progress = min(current / total, 1.0)
+        percent = progress * 100
+        
+        if progress > 0:
+            eta_seconds = (total - current) / speed if speed > 0 else 0
+            minutes, seconds = divmod(int(eta_seconds), 60)
+            eta = f"{minutes}m, {seconds}s" if minutes > 0 else f"{seconds}s"
+        else:
+            eta = "N/A"
+        
+        bar_length = 10
+        filled = int(bar_length * progress)
+        bar = "▪" * filled + "▫" * (bar_length - filled)
+        
+        action = "Uploading" if is_upload else "Downloading"
+        
+        text = (
+            f"{action}: <b>{percent:.2f}%</b>\n"
+            f"[{bar}]\n"
+            f"<code>{sizeof_fmt(current)} of {sizeof_fmt(total)}</code>\n"
+            f"Speed: <code>{sizeof_fmt(speed)}/sec</code>\n"
+            f"ETA: <code>{eta}</code>\n\n"
+            f"📁 <b>{filename}</b>\n\n"
+            f"Thanks for using 👑"
+        )
+        
+        if int(elapsed) % 2 == 0:
+            try:
+                await message.edit_text(text)
+            except:
+                pass
+            
+    except:
+        pass
+
+# ============================================
+# UPLOAD FUNCTION
 # ============================================
 async def upload_file(filepath: str, filename: str, message: Message, status_msg: Message):
-    """Upload file with THUMBNAIL ATTACHED - FIXED"""
+    """Upload file with thumbnail"""
     try:
         start_time = time.time()
         file_size = os.path.getsize(filepath)
@@ -446,13 +536,10 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         
         upload_as_doc = json_db.get_setting(user_id, "upload_as_doc", True)
         
-        # Get thumbnail path
         thumb_path = await get_user_thumbnail_path(user_id)
         
-        # Clean filename
         clean_name = clean_filename(filename)
         
-        # Determine file type
         lower_name = clean_name.lower()
         is_video = lower_name.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm'))
         is_audio = lower_name.endswith(('.mp3', '.wav', '.flac', '.m4a', '.ogg', '.opus'))
@@ -460,7 +547,6 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         
         await status_msg.edit_text(f"📤 Uploading...\n<b>{clean_name}</b>")
         
-        # Upload with thumbnail for all types - FIXED
         if is_image:
             await bot.send_photo(
                 chat_id=message.chat.id,
@@ -487,18 +573,16 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
                 progress_args=(status_msg, start_time, clean_name, True)
             )
         else:
-            # FIXED: Thumbnail for documents too!
             await bot.send_document(
                 chat_id=message.chat.id,
                 document=filepath,
                 caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}",
-                thumb=thumb_path,  # THUMBNAIL FOR FILES!
+                thumb=thumb_path,
                 file_name=clean_name,
                 progress=progress_callback,
                 progress_args=(status_msg, start_time, clean_name, True)
             )
         
-        # Clean up
         try:
             await status_msg.delete()
         except:
@@ -520,14 +604,13 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
 async def start_help_command(_, message: Message):
     """Handle /start and /help"""
     text = (
-        "👑 <b>Enhanced URL Uploader Bot</b>\n\n"
+        "👑 <b>ARIA2 POWERED BOT</b>\n\n"
         "<b>Features:</b>\n"
-        "• High-speed downloads (5MB chunks)\n"
-        "• YouTube video downloads\n"
-        "• Custom filenames: <code>URL|name.mp4</code>\n"
-        "• Custom thumbnails for all files\n"
-        "• Clean filename formatting\n"
-        "• File-to-link bot support\n\n"
+        "• ⚡ Ultra-fast downloads (aria2c)\n"
+        "• 16 connections per server\n"
+        "• Custom thumbnails\n"
+        "• Clean filenames\n"
+        "• Progress tracking\n\n"
         "<b>Commands:</b>\n"
         "/stats - Bot statistics\n"
         "/settings - Configure settings\n"
@@ -559,7 +642,7 @@ async def stats_command(_, message: Message):
         downloads = stats["total_downloads"]
         
         text = (
-            "📊 <b>Bot Statistics</b>\n\n"
+            "📊 <b>Statistics</b>\n\n"
             f"├ <b>Downloads:</b> {downloads}\n"
             f"├ <b>Cache:</b> {sizeof_fmt(total_size)}\n"
             f"├ <b>CPU:</b> {cpu}%\n"
@@ -604,7 +687,7 @@ async def save_thumbnail(_, message: Message):
 
 @bot.on_message(filters.text & filters.private)
 async def handle_url(_, message: Message):
-    """Handle URL with redirect support"""
+    """Handle URL"""
     try:
         url = message.text.strip()
         
@@ -622,7 +705,7 @@ async def handle_url(_, message: Message):
                 custom_name = None
         
         if not is_valid_url(url):
-            await message.reply_text("❌ Invalid URL!")
+            await message.reply_text("❌ Invalid URL format!")
             return
         
         if is_youtube_url(url):
@@ -635,44 +718,35 @@ async def handle_url(_, message: Message):
         await message.reply_text("❌ Error processing URL")
 
 async def handle_direct_url(_, message: Message, url: str, custom_name: Optional[str]):
-    """Handle direct download with redirect support"""
+    """Handle direct download - NOW USES ARIA2"""
     status_msg = None
     try:
         status_msg = await message.reply_text("🔍 Processing URL...")
         
-        async with aiohttp.ClientSession() as session:
-            # Support redirects with higher timeout
-            timeout = aiohttp.ClientTimeout(total=7200)
-            async with session.head(url, timeout=timeout, allow_redirects=True) as response:
-                if response.status not in [200, 206]:
-                    await status_msg.edit_text(f"❌ URL not accessible! Status: {response.status}")
-                    return
-                
-                # Get final URL after redirects
-                final_url = str(response.url)
-                
-                content_disposition = response.headers.get('Content-Disposition')
-                
-                # Generate clean filename
-                original_name = os.path.basename(final_url.split('?')[0]) or "file"
-                filename = custom_name or clean_filename(original_name)
-                
-                content_length = response.headers.get('Content-Length')
-                if content_length:
-                    file_size = int(content_length)
-                    if file_size > MAX_FILE_SIZE:
-                        await status_msg.edit_text(f"❌ File too large! {sizeof_fmt(file_size)}")
-                        return
+        # Get filename
+        parsed_url = urllib.parse.urlparse(url)
         
-        # Download
-        await status_msg.edit_text(f"📥 Downloading...\n<b>{filename}</b>")
-        await asyncio.sleep(0.5)
+        if custom_name:
+            filename = custom_name
+        else:
+            path_name = os.path.basename(parsed_url.path)
+            if path_name and '.' in path_name:
+                filename = urllib.parse.unquote(path_name)
+            else:
+                filename = "file.mkv"
         
-        filepath = os.path.join(DOWNLOAD_DIR, filename)
-        success = await download_file(url, filepath, status_msg, filename)
+        # Clean filename
+        clean_name = clean_filename(filename)
+        
+        # Show filename
+        await status_msg.edit_text(f"📥 Downloading...\n<b>{clean_name}</b>")
+        
+        # Use ARIA2 for download
+        filepath = os.path.join(DOWNLOAD_DIR, clean_name)
+        success = await download_with_aria2(url, filepath, status_msg, clean_name)
         
         if success:
-            await upload_file(filepath, filename, message, status_msg)
+            await upload_file(filepath, clean_name, message, status_msg)
         else:
             await status_msg.edit_text("❌ Download failed!")
         
@@ -714,7 +788,7 @@ async def handle_youtube_url(_, message: Message, url: str, custom_name: Optiona
 
 @bot.on_callback_query()
 async def handle_callback(_, callback_query: CallbackQuery):
-    """Handle callbacks - FIXED"""
+    """Handle callbacks"""
     try:
         data = callback_query.data
         user_id = callback_query.from_user.id
@@ -783,21 +857,24 @@ async def handle_callback(_, callback_query: CallbackQuery):
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("🚀 Starting URL Uploader Bot...")
-    print("⚡ HIGH-SPEED MODE ENABLED")
+    print("🚀 ARIA2 POWERED BOT STARTING...")
+    print("⚡ MAXIMUM SPEED MODE")
     print("=" * 50)
     
-    # Install yt-dlp if missing
+    # Check dependencies
     try:
-        result = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=10)
-        print(f"✅ yt-dlp: {result.stdout.strip()}")
+        subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=10)
+        print("✅ yt-dlp OK")
     except:
         print("📦 Installing yt-dlp...")
-        try:
-            subprocess.run(["pip", "install", "-q", "yt-dlp"], capture_output=True, timeout=60)
-            print("✅ Installed")
-        except Exception as e:
-            print(f"❌ Install failed: {e}")
+        subprocess.run(["pip", "install", "-q", "yt-dlp"], capture_output=True)
+    
+    try:
+        subprocess.run(["aria2c", "--version"], capture_output=True, text=True, timeout=10)
+        print("✅ aria2c OK")
+    except:
+        print("❌ aria2c NOT FOUND!")
+        print("Install on Render: apt-get install aria2")
     
     # Start web server
     print("🌐 Starting web server...")

@@ -8,7 +8,6 @@ services:
   healthCheckPath: /health
   autoDeploy: true
   
-  # Environment variables with your credentials
   envVars:
   - key: API_ID
     value: "2819362"
@@ -17,12 +16,10 @@ services:
   - key: BOT_TOKEN
     value: "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
   
-  # Persistent storage for JSON DB and downloads
   disk:
     name: bot-data
     mountPath: /app/data
-    sizeGB: 1  # Free plan limit
+    sizeGB: 1
   
-  # Runtime settings
   region: frankfurt
   branch: main

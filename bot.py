@@ -37,14 +37,13 @@ DEFAULT_THUMB_ID = "AgACAgUAAxkBAAE9vJdpFKHL4lIezMqiAhL4U86UBU9HFAACcg5rGxoHoVRR
 # Force ARIA2 check with explicit path
 ARIA2_AVAILABLE = False
 try:
-    # Check in common locations
     for path in ["/usr/bin/aria2c", "/usr/local/bin/aria2c", "aria2c"]:
         if subprocess.run([path, "--version"], capture_output=True, timeout=5, stdin=subprocess.DEVNULL).returncode == 0:
             ARIA2_AVAILABLE = True
-            print(f"✅ Aria2 found at: {path}")
+            print("FOUND ARIA2 AT: {}".format(path))
             break
 except Exception as e:
-    print(f"❌ Aria2 check failed: {e}")
+    print("ARIA2 CHECK FAILED: {}".format(e))
 
 # Create directories with proper permissions
 os.makedirs(DOWNLOAD_DIR, exist_ok=True, mode=0o755)
@@ -64,7 +63,7 @@ class JsonStorage:
                 with open(self.filepath, 'r') as f:
                     return json.load(f)
         except Exception as e:
-            logging.error(f"JSON load error: {e}")
+            logging.error("JSON LOAD ERROR: {}".format(e))
         return {"thumbnails": {}, "settings": {}, "stats": {"total_downloads": 0}}
     
     def save(self):
@@ -72,7 +71,7 @@ class JsonStorage:
             with open(self.filepath, 'w') as f:
                 json.dump(self.data, f, indent=2)
         except Exception as e:
-            logging.error(f"JSON save error: {e}")
+            logging.error("JSON SAVE ERROR: {}".format(e))
     
     def get_thumbnail(self, user_id: int) -> Optional[str]:
         return self.data["thumbnails"].get(str(user_id))
@@ -121,7 +120,7 @@ def run_web_server():
     try:
         app.run(host='0.0.0.0', port=80, debug=False, use_reloader=False)
     except Exception as e:
-        logging.error(f"Web server error: {e}")
+        logging.error("WEB SERVER ERROR: {}".format(e))
 
 # ============================================
 # BOT INITIALIZATION
@@ -155,9 +154,9 @@ def sizeof_fmt(num: float, suffix: str = "B") -> str:
     try:
         for unit in ["", "K", "M", "G", "T"]:
             if abs(num) < 1024.0:
-                return f"{num:3.1f}{unit}{suffix}"
+                return "{:3.1f}{}{}".format(num, unit, suffix)
             num /= 1024.0
-        return f"{num:.1f}P{suffix}"
+        return "{:.1f}P{}".format(num, suffix)
     except:
         return "Unknown"
 
@@ -260,12 +259,12 @@ async def download_thumbnail(thumb_id: str, filepath: str) -> bool:
                 with Image.open(filepath) as img:
                     img.save(filepath, 'JPEG', quality=70, optimize=True)
             
-            logger.info(f"✅ Thumbnail validated: {filepath} ({os.path.getsize(filepath)} bytes)")
+            logger.info("THUMBNAIL VALIDATED: {} ({} bytes)".format(filepath, os.path.getsize(filepath)))
             return True
         
         return False
     except Exception as e:
-        logger.error(f"Thumbnail download/validation error: {e}")
+        logger.error("THUMBNAIL VALIDATION ERROR: {}".format(e))
         # Remove invalid file
         if os.path.exists(filepath):
             os.remove(filepath)
@@ -278,7 +277,7 @@ async def get_user_thumbnail_path(user_id: int) -> Optional[str]:
     thumb_path = None
     
     if thumb_id:
-        thumb_path = os.path.join(DOWNLOAD_DIR, f"{user_id}_thumb.jpg")
+        thumb_path = os.path.join(DOWNLOAD_DIR, "{}_thumb.jpg".format(user_id))
         if not os.path.exists(thumb_path):
             success = await download_thumbnail(thumb_id, thumb_path)
             if not success:
@@ -303,8 +302,8 @@ async def download_with_fallback(url: str, filepath: str, message: Message, file
         clean_name = clean_filename(filename)
         final_path = os.path.join(os.path.dirname(filepath), clean_name)
         
-        await message.edit_text(f"⚠️ Using standard downloader...\n<b>{clean_name}</b>\nSpeed will be slower than aria2")
-        logger.warning(f"Fallback download: {url}")
+        await message.edit_text("WARNING: Using standard downloader...\n{}\nSpeed will be slower than aria2".format(clean_name))
+        logger.warning("FALLBACK DOWNLOAD: {}".format(url))
         
         async with aiohttp.ClientSession() as session:
             headers = {
@@ -312,7 +311,7 @@ async def download_with_fallback(url: str, filepath: str, message: Message, file
             }
             async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3600)) as response:
                 if response.status != 200:
-                    await message.edit_text(f"❌ HTTP Error: {response.status}")
+                    await message.edit_text("HTTP Error: {}".format(response.status))
                     return False
                 
                 total_size = int(response.headers.get('content-length', 0))
@@ -333,15 +332,15 @@ async def download_with_fallback(url: str, filepath: str, message: Message, file
                             last_update = time.time()
         
         if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-            logger.info(f"✅ Fallback download complete: {final_path}")
+            logger.info("FALLBACK DOWNLOAD COMPLETE: {}".format(final_path))
             return True
         else:
-            await message.edit_text("❌ Download failed - file is empty")
+            await message.edit_text("Download failed - file is empty")
             return False
             
     except Exception as e:
-        logger.error(f"❌ Fallback error: {str(e)}", exc_info=True)
-        await message.edit_text(f"❌ Download error: {str(e)}")
+        logger.error("FALLBACK ERROR: {}".format(e), exc_info=True)
+        await message.edit_text("Download error: {}".format(str(e)))
         return False
 
 # ============================================
@@ -358,15 +357,15 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
         final_path = os.path.join(final_dir, clean_name)
         os.makedirs(final_dir, exist_ok=True)
         
-        logger.info(f"Starting aria2 download: {url} -> {final_path}")
+        logger.info("STARTING ARIA2 DOWNLOAD: {} -> {}".format(url, final_path))
         
         cmd = [
             "aria2c",
             "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "--continue=true",
             "--summary-interval=1",
-            f"--dir={final_dir}",
-            f"--out={clean_name}",
+            "--dir={}".format(final_dir),
+            "--out={}".format(clean_name),
             "--console-log-level=error",
             "--max-connection-per-server=16",
             "--split=16",
@@ -404,7 +403,7 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
                 continue
             
             line = line.decode('utf-8', errors='ignore').strip()
-            logger.debug(f"aria2: {line}")
+            logger.debug("ARIA2: {}".format(line))
             
             if "DL:" in line and "%" in line:
                 try:
@@ -424,17 +423,17 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
         await process.wait()
         
         if process.returncode == 0 and os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-            logger.info(f"✅ Download complete: {final_path}")
+            logger.info("DOWNLOAD COMPLETE: {}".format(final_path))
             return True
         else:
             stderr = await process.stderr.read()
             error = stderr.decode('utf-8', errors='ignore')[:500]
-            logger.error(f"❌ Aria2 failed: {error}")
-            await message.edit_text(f"❌ Download failed!\n<code>{error}</code>")
+            logger.error("ARIA2 FAILED: {}".format(error))
+            await message.edit_text("Download failed!\n{}".format(error))
             return False
             
     except Exception as e:
-        logger.error(f"❌ Aria2 error: {str(e)}", exc_info=True)
+        logger.error("ARIA2 ERROR: {}".format(str(e)), exc_info=True)
         return await download_with_fallback(url, filepath, message, filename)
 
 # ============================================
@@ -443,13 +442,13 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
 async def download_youtube_video(url: str, format_id: str, filepath: str, message: Message) -> bool:
     """Download YouTube video"""
     try:
-        await message.edit_text("📥 Starting YouTube download...")
+        await message.edit_text("Starting YouTube download...")
         clean_name = clean_filename(os.path.basename(filepath))
         final_path = os.path.join(os.path.dirname(filepath), clean_name)
         
         cmd = [
             "yt-dlp",
-            "-f", f"{format_id}+bestaudio/best",
+            "-f", "{}+bestaudio/best".format(format_id),
             "--merge-output-format", "mp4",
             "--no-warnings",
             "--no-check-certificate",
@@ -493,12 +492,12 @@ async def download_youtube_video(url: str, format_id: str, filepath: str, messag
         else:
             _, stderr = await process.communicate()
             error_msg = stderr.decode()[:200]
-            await message.edit_text(f"❌ YouTube download failed!\n<code>{error_msg}</code>")
+            await message.edit_text("YouTube download failed!\n{}".format(error_msg))
             return False
             
     except Exception as e:
-        logger.error(f"YouTube download error: {e}")
-        await message.edit_text(f"❌ YouTube error: {str(e)}")
+        logger.error("YOUTUBE DOWNLOAD ERROR: {}".format(e))
+        await message.edit_text("YouTube error: {}".format(str(e)))
         return False
 
 async def get_youtube_formats(url: str, message: Message) -> Optional[list]:
@@ -510,7 +509,7 @@ async def get_youtube_formats(url: str, message: Message) -> Optional[list]:
         
         if process.returncode != 0:
             error = stderr.decode()[:200]
-            await message.edit_text(f"❌ Could not fetch video info!\n<code>{error}</code>")
+            await message.edit_text("Could not fetch video info!\n{}".format(error))
             return None
         
         data = json.loads(stdout.decode())
@@ -527,7 +526,7 @@ async def get_youtube_formats(url: str, message: Message) -> Optional[list]:
                     formats.append({
                         "id": format_id,
                         "ext": ext,
-                        "quality": f"{height}p",
+                        "quality": "{}p".format(height),
                         "size": filesize
                     })
         
@@ -535,8 +534,8 @@ async def get_youtube_formats(url: str, message: Message) -> Optional[list]:
         return formats[:5]
     
     except Exception as e:
-        logger.error(f"Format fetch error: {e}")
-        await message.edit_text("❌ Error parsing video info!")
+        logger.error("FORMAT FETCH ERROR: {}".format(e))
+        await message.edit_text("Error parsing video info!")
         return None
 
 # ============================================
@@ -557,24 +556,28 @@ async def progress_callback(current: int, total: int, message: Message, start_ti
         if progress > 0:
             eta_seconds = (total - current) / speed if speed > 0 else 0
             minutes, seconds = divmod(int(eta_seconds), 60)
-            eta = f"{minutes}m, {seconds}s" if minutes > 0 else f"{seconds}s"
+            eta = "{}m {}s".format(minutes, seconds) if minutes > 0 else "{}s".format(seconds)
         else:
             eta = "N/A"
         
         bar_length = 10
         filled = int(bar_length * progress)
-        bar = "▪" * filled + "▫" * (bar_length - filled)
+        bar = "█" * filled + "░" * (bar_length - filled)
         
-        action = "📤 Uploading" if is_upload else "📥 Downloading"
+        action = "UPLOADING" if is_upload else "DOWNLOADING"
         
         text = (
-            f"{action}: <b>{percent:.2f}%</b>\n"
-            f"[{bar}]\n"
-            f"<code>{sizeof_fmt(current)} of {sizeof_fmt(total)}</code>\n"
-            f"⚡ Speed: <code>{sizeof_fmt(speed)}/sec</code>\n"
-            f"⏳ ETA: <code>{eta}</code>\n\n"
-            f"📁 <b>{filename}</b>\n\n"
-            f"🤖 Bot by @YourUsername"
+            "{}: {:.2f}%\n"
+            "[{}]\n"
+            "{} of {}\n"
+            "SPEED: {}/sec\n"
+            "ETA: {}\n\n"
+            "FILE: {}\n\n"
+            "BOT BY @YOURUSERNAME"
+        ).format(
+            action, percent, bar,
+            sizeof_fmt(current), sizeof_fmt(total),
+            sizeof_fmt(speed), eta, filename
         )
         
         if int(elapsed) % 2 == 0:
@@ -583,10 +586,10 @@ async def progress_callback(current: int, total: int, message: Message, start_ti
             except MessageNotModified:
                 pass
             except Exception as e:
-                logger.error(f"Progress update error: {e}")
+                logger.error("PROGRESS UPDATE ERROR: {}".format(e))
             
     except Exception as e:
-        logger.error(f"Progress callback error: {e}")
+        logger.error("PROGRESS CALLBACK ERROR: {}".format(e))
 
 # ============================================
 # UPLOAD FUNCTION - FIXED THUMBNAIL
@@ -603,9 +606,9 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         # CRITICAL FIX: Get thumbnail BEFORE upload
         thumb_path = await get_user_thumbnail_path(user_id)
         if thumb_path:
-            logger.info(f"✅ Using thumbnail: {thumb_path} ({os.path.getsize(thumb_path)} bytes)")
+            logger.info("USING THUMBNAIL: {} ({} bytes)".format(thumb_path, os.path.getsize(thumb_path)))
         else:
-            logger.warning("❌ No thumbnail available")
+            logger.warning("NO THUMBNAIL AVAILABLE")
         
         clean_name = clean_filename(filename)
         lower_name = clean_name.lower()
@@ -613,20 +616,20 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         is_audio = lower_name.endswith(('.mp3', '.wav', '.flac', '.m4a', '.ogg', '.opus'))
         is_image = lower_name.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'))
         
-        await status_msg.edit_text(f"📤 Uploading...\n<b>{clean_name}</b>")
+        await status_msg.edit_text("UPLOADING...\n{}".format(clean_name))
         
         # Upload with thumbnail
         if is_image:
             await bot.send_photo(
                 chat_id=message.chat.id,
                 photo=filepath,
-                caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}"
+                caption="SUCCESS: {}\nSIZE: {}".format(clean_name, sizeof_fmt(file_size))
             )
         elif is_audio:
             await bot.send_audio(
                 chat_id=message.chat.id,
                 audio=filepath,
-                caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}",
+                caption="SUCCESS: {}\nSIZE: {}".format(clean_name, sizeof_fmt(file_size)),
                 thumb=thumb_path,
                 progress=progress_callback,
                 progress_args=(status_msg, start_time, clean_name, True)
@@ -636,7 +639,7 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
             await bot.send_video(
                 chat_id=message.chat.id,
                 video=filepath,
-                caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}",
+                caption="SUCCESS: {}\nSIZE: {}".format(clean_name, sizeof_fmt(file_size)),
                 supports_streaming=True,
                 thumb=thumb_path,  # This enables thumbnail preview
                 progress=progress_callback,
@@ -646,7 +649,7 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
             await bot.send_document(
                 chat_id=message.chat.id,
                 document=filepath,
-                caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}",
+                caption="SUCCESS: {}\nSIZE: {}".format(clean_name, sizeof_fmt(file_size)),
                 thumb=thumb_path,
                 file_name=clean_name,
                 progress=progress_callback,
@@ -661,13 +664,13 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         # Clean up
         if os.path.exists(filepath):
             os.remove(filepath)
-            logger.info(f"Cleaned up: {filepath}")
+            logger.info("CLEANED UP: {}".format(filepath))
         
         json_db.increment_stats()
         
     except Exception as e:
-        logger.error(f"Upload error: {e}", exc_info=True)
-        await status_msg.edit_text(f"❌ Upload failed: {str(e)}")
+        logger.error("UPLOAD ERROR: {}".format(e), exc_info=True)
+        await status_msg.edit_text("UPLOAD FAILED: {}".format(str(e)))
 
 # ============================================
 # HANDLERS
@@ -675,27 +678,28 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
 @bot.on_message(filters.command(["start", "help"]) & filters.private)
 async def start_help_command(_, message: Message):
     """Handle /start and /help"""
-    aria_status = "✅ Active" if ARIA2_AVAILABLE else "⚠️ Unavailable (Slow Mode)"
+    aria_status = "ACTIVE" if ARIA2_AVAILABLE else "UNAVAILABLE (SLOW MODE)"
     text = (
-        "👑 <b>ARIA2 POWERED BOT</b>\n\n"
-        f"<b>Status:</b> {aria_status}\n\n"
-        "<b>Features:</b>\n"
-        "• ⚡ Ultra-fast downloads (aria2c)\n"
-        "• Custom thumbnails (JPEG format)\n"
-        "• Clean filenames\n"
-        "• Progress tracking\n\n"
-        "<b>Commands:</b>\n"
+        "ARIA2 POWERED BOT\n\n"
+        "STATUS: {}\n\n"
+        "FEATURES:\n"
+        "- Ultra-fast downloads (aria2c)\n"
+        "- Custom thumbnails (JPEG format)\n"
+        "- Clean filenames\n"
+        "- Progress tracking\n\n"
+        "COMMANDS:\n"
         "/stats - Bot statistics\n"
         "/settings - Configure settings\n"
         "/thumb - Set custom thumbnail\n\n"
-        "<b>Supported URLs:</b>\n"
-        "• Direct links (seedr.cc, file.link, etc.)\n"
-        "• YouTube videos\n"
-        "• File-to-link bot URLs"
-    )
+        "SUPPORTED URLs:\n"
+        "- Direct links (seedr.cc, file.link, etc.)\n"
+        "- YouTube videos\n"
+        "- File-to-link bot URLs"
+    ).format(aria_status)
+    
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stats", callback_data="stats"),
-         InlineKeyboardButton("⚙️ Settings", callback_data="settings")]
+        [InlineKeyboardButton("STATS", callback_data="stats"),
+         InlineKeyboardButton("SETTINGS", callback_data="settings")]
     ])
     await message.reply_text(text, reply_markup=buttons)
 
@@ -719,19 +723,22 @@ async def stats_command(_, message: Message):
         downloads = stats["total_downloads"]
         
         text = (
-            "📊 <b>Statistics</b>\n\n"
-            f"├ <b>Downloads:</b> {downloads}\n"
-            f"├ <b>Cache:</b> {sizeof_fmt(total_size)}\n"
-            f"├ <b>CPU:</b> {cpu}%\n"
-            f"├ <b>RAM:</b> {ram}%\n"
-            f"└ <b>Disk:</b> {disk}%\n\n"
-            f"<b>Aria2:</b> {'✅ Available' if ARIA2_AVAILABLE else '❌ Unavailable'}\n"
-            f"<b>Thumbnail:</b> ✅ Auto-applied"
+            "STATISTICS\n\n"
+            "DOWNLOADS: {}\n"
+            "CACHE: {}\n"
+            "CPU: {}%\n"
+            "RAM: {}%\n"
+            "DISK: {}%\n\n"
+            "ARIA2: {}\n"
+            "THUMBNAIL: AUTO-APPLIED"
+        ).format(
+            downloads, sizeof_fmt(total_size), cpu, ram, disk,
+            "AVAILABLE" if ARIA2_AVAILABLE else "UNAVAILABLE"
         )
         await message.reply_text(text)
     except Exception as e:
-        logger.error(f"Stats error: {e}")
-        await message.reply_text("❌ Error fetching stats")
+        logger.error("STATS ERROR: {}".format(e))
+        await message.reply_text("ERROR FETCHING STATS")
 
 @bot.on_message(filters.command("settings") & filters.private)
 async def settings_command(_, message: Message):
@@ -740,57 +747,59 @@ async def settings_command(_, message: Message):
         user_id = message.from_user.id
         upload_as_doc = json_db.get_setting(user_id, "upload_as_doc", True)
         
-        mode = "📁 Document (file)" if upload_as_doc else "📹 Video (streaming)"
-        text = f"⚙️ <b>Settings</b>\n\n<b>Upload Mode:</b> {mode}\n<b>Aria2:</b> {'✅' if ARIA2_AVAILABLE else '❌'}"
+        mode = "DOCUMENT (FILE)" if upload_as_doc else "VIDEO (STREAMING)"
+        text = "SETTINGS\n\nUPLOAD MODE: {}\nARIA2: {}".format(
+            mode, "AVAILABLE" if ARIA2_AVAILABLE else "UNAVAILABLE"
+        )
         
         buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Toggle Upload Mode", callback_data="toggle_upload")],
-            [InlineKeyboardButton("Delete Thumbnail", callback_data="del_thumb")],
-            [InlineKeyboardButton("Close", callback_data="close")]
+            [InlineKeyboardButton("TOGGLE UPLOAD MODE", callback_data="toggle_upload")],
+            [InlineKeyboardButton("DELETE THUMBNAIL", callback_data="del_thumb")],
+            [InlineKeyboardButton("CLOSE", callback_data="close")]
         ])
         
         await message.reply_text(text, reply_markup=buttons)
     except Exception as e:
-        logger.error(f"Settings error: {e}")
-        await message.reply_text("❌ Error loading settings")
+        logger.error("SETTINGS ERROR: {}".format(e))
+        await message.reply_text("ERROR LOADING SETTINGS")
 
 @bot.on_message(filters.command("thumb") & filters.private)
 async def thumb_info(_, message: Message):
     """Info about setting thumbnail"""
     await message.reply_text(
-        "📸 <b>Set Custom Thumbnail</b>\n\n"
+        "SET CUSTOM THUMBNAIL\n\n"
         "Just send any photo to this bot and it will be used as thumbnail for all your video/file uploads!\n\n"
-        "Requirements:\n"
-        "• JPEG format (auto-converted)\n"
-       • Max size: 200KB (auto-compressed)\n"
-        "• Resolution: 320x320 max (auto-resized)"
+        "REQUIREMENTS:\n"
+        "- JPEG format (auto-converted)\n"
+        "- Max size: 200KB (auto-compressed)\n"
+        "- Resolution: 320x320 max (auto-resized)"
     )
 
 @bot.on_message(filters.photo & filters.private)
 async def save_thumbnail(_, message: Message):
-    """Save custom thumbnail - ENHANCED"""
+    """Save custom thumbnail"""
     try:
         user_id = message.from_user.id
         file_id = message.photo.file_id
         
         # Validate it's a photo
         if not message.photo:
-            await message.reply_text("❌ Please send a valid photo!")
+            await message.reply_text("Please send a valid photo!")
             return
         
         json_db.set_thumbnail(user_id, file_id)
         
         # Test download and validate
-        test_path = os.path.join(DOWNLOAD_DIR, f"{user_id}_temp_thumb.jpg")
+        test_path = os.path.join(DOWNLOAD_DIR, "{}_temp_thumb.jpg".format(user_id))
         if await download_thumbnail(file_id, test_path):
             os.remove(test_path)
-            await message.reply_text("✅ Thumbnail saved and validated!\n\nWill be used for all video/file uploads.")
+            await message.reply_text("THUMBNAIL SAVED AND VALIDATED!\n\nWill be used for all video/file uploads.")
         else:
-            await message.reply_text("⚠️ Thumbnail saved but may be invalid. Please send a JPEG image.")
+            await message.reply_text("WARNING: Thumbnail saved but may be invalid. Please send a JPEG image.")
             
     except Exception as e:
-        logger.error(f"Thumbnail save error: {e}")
-        await message.reply_text("❌ Failed to save thumbnail")
+        logger.error("THUMBNAIL SAVE ERROR: {}".format(e))
+        await message.reply_text("FAILED TO SAVE THUMBNAIL")
 
 @bot.on_message(filters.text & filters.private)
 async def handle_url(_, message: Message):
@@ -799,7 +808,7 @@ async def handle_url(_, message: Message):
         url = message.text.strip()
         
         if not url or len(url) < 10:
-            await message.reply_text("❌ Invalid URL!")
+            await message.reply_text("INVALID URL!")
             return
         
         # Parse custom filename
@@ -812,7 +821,7 @@ async def handle_url(_, message: Message):
                 custom_name = None
         
         if not is_valid_url(url):
-            await message.reply_text("❌ Invalid URL format!\n\nSupported: direct links, YouTube, file-to-link bots")
+            await message.reply_text("INVALID URL FORMAT!\n\nSupported: direct links, YouTube, file-to-link bots")
             return
         
         if is_youtube_url(url):
@@ -821,14 +830,14 @@ async def handle_url(_, message: Message):
             await handle_direct_url(_, message, url, custom_name)
             
     except Exception as e:
-        logger.error(f"URL handler error: {e}", exc_info=True)
-        await message.reply_text("❌ Error processing URL")
+        logger.error("URL HANDLER ERROR: {}".format(e), exc_info=True)
+        await message.reply_text("ERROR PROCESSING URL")
 
 async def handle_direct_url(_, message: Message, url: str, custom_name: Optional[str]):
     """Handle direct download"""
     status_msg = None
     try:
-        status_msg = await message.reply_text("🔍 Processing URL...")
+        status_msg = await message.reply_text("PROCESSING URL...")
         
         # Get filename
         parsed_url = urllib.parse.urlparse(url)
@@ -840,14 +849,14 @@ async def handle_direct_url(_, message: Message, url: str, custom_name: Optional
             if path_name and '.' in path_name:
                 filename = urllib.parse.unquote(path_name)
             else:
-                filename = f"file_{int(time.time())}.mkv"
+                filename = "file_{}.mkv".format(int(time.time()))
         
         # Clean filename
         clean_name = clean_filename(filename)
         
         # Show filename
-        downloader_name = "⚡ Aria2" if ARIA2_AVAILABLE else "🐌 Standard"
-        await status_msg.edit_text(f"📥 Downloading...\n<b>{clean_name}</b>\nDownloader: {downloader_name}")
+        downloader_name = "ARIA2" if ARIA2_AVAILABLE else "STANDARD"
+        await status_msg.edit_text("DOWNLOADING...\n{}\nDownloader: {}".format(clean_name, downloader_name))
         
         # Use ARIA2 or fallback
         filepath = os.path.join(DOWNLOAD_DIR, clean_name)
@@ -861,20 +870,20 @@ async def handle_direct_url(_, message: Message, url: str, custom_name: Optional
         else:
             if os.path.exists(filepath):
                 os.remove(filepath)
-            await status_msg.edit_text("❌ Download failed! Check logs for details.")
+            await status_msg.edit_text("DOWNLOAD FAILED! CHECK LOGS FOR DETAILS.")
         
     except Exception as e:
-        logger.error(f"Direct URL error: {e}", exc_info=True)
+        logger.error("DIRECT URL ERROR: {}".format(e), exc_info=True)
         if status_msg:
-            await status_msg.edit_text(f"❌ Critical error: {str(e)}")
+            await status_msg.edit_text("CRITICAL ERROR: {}".format(str(e)))
         else:
-            await message.reply_text(f"❌ Critical error: {str(e)}")
+            await message.reply_text("CRITICAL ERROR: {}".format(str(e)))
 
 async def handle_youtube_url(_, message: Message, url: str, custom_name: Optional[str]):
     """Handle YouTube URL"""
     status_msg = None
     try:
-        status_msg = await message.reply_text("🔍 Fetching video info...")
+        status_msg = await message.reply_text("FETCHING VIDEO INFO...")
         
         formats = await get_youtube_formats(url, status_msg)
         
@@ -885,21 +894,21 @@ async def handle_youtube_url(_, message: Message, url: str, custom_name: Optiona
         buttons = []
         for f in formats:
             size_str = sizeof_fmt(f['size']) if f['size'] else "Unknown"
-            btn_text = f"📹 {f['quality']} ({size_str})"
-            callback_data = f"yt_{f['id']}_{f['ext']}_{custom_name or 'video'}"
+            btn_text = "{} ({})".format(f['quality'], size_str)
+            callback_data = "yt_{}_{}_{}".format(f['id'], f['ext'], custom_name or 'video')
             buttons.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
         
-        buttons.append([InlineKeyboardButton("🔒 Close", callback_data="close")])
+        buttons.append([InlineKeyboardButton("CLOSE", callback_data="close")])
         
         await status_msg.edit_text(
-            "🎬 <b>Select Quality:</b>",
+            "SELECT QUALITY:",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
         
     except Exception as e:
-        logger.error(f"YouTube handler error: {e}", exc_info=True)
+        logger.error("YOUTUBE HANDLER ERROR: {}".format(e), exc_info=True)
         if status_msg:
-            await status_msg.edit_text("❌ Error processing YouTube URL")
+            await status_msg.edit_text("ERROR PROCESSING YOUTUBE URL")
 
 @bot.on_callback_query()
 async def handle_callback(_, callback_query: CallbackQuery):
@@ -913,7 +922,7 @@ async def handle_callback(_, callback_query: CallbackQuery):
         elif data == "stats":
             await stats_command(_, callback_query.message)
         elif data == "settings":
-            await settings_command(_, callback queue.message)
+            await settings_command(_, callback_query.message)
         elif data == "close":
             try:
                 await callback_query.message.delete()
@@ -922,12 +931,12 @@ async def handle_callback(_, callback_query: CallbackQuery):
         elif data == "toggle_upload":
             current = json_db.get_setting(user_id, "upload_as_doc", True)
             json_db.set_setting(user_id, "upload_as_doc", not current)
-            mode = "📹 Video" if not current else "📁 Document"
-            await callback_query.answer(f"✅ Mode: {mode}")
+            mode = "VIDEO" if not current else "DOCUMENT"
+            await callback_query.answer("MODE: {}".format(mode))
             await settings_command(_, callback_query.message)
         elif data == "del_thumb":
             json_db.delete_thumbnail(user_id)
-            await callback_query.answer("✅ Thumbnail deleted!")
+            await callback_query.answer("THUMBNAIL DELETED!")
             await settings_command(_, callback_query.message)
         elif data.startswith("yt_"):
             # Extract URL
@@ -944,22 +953,22 @@ async def handle_callback(_, callback_query: CallbackQuery):
                             break
             
             if not url:
-                await callback_query.answer("❌ No URL found!")
+                await callback_query.answer("NO URL FOUND!")
                 return
             
             parts = data.split("_", 3)
             if len(parts) < 3:
-                await callback_query.answer("❌ Invalid callback data!")
+                await callback_query.answer("INVALID CALLBACK DATA!")
                 return
             
             format_id = parts[1]
             ext = parts[2]
             custom_name = parts[3] if len(parts) > 3 and parts[3] != 'video' else None
             
-            await callback_query.answer("📥 Downloading...")
+            await callback_query.answer("DOWNLOADING...")
             
             status_msg = callback_query.message
-            filename = custom_name or f"youtube_video_{int(time.time())}.{ext}"
+            filename = custom_name or "youtube_video_{}.{}".format(int(time.time()), ext)
             filepath = os.path.join(DOWNLOAD_DIR, filename)
             
             success = await download_youtube_video(url, format_id, filepath, status_msg)
@@ -974,48 +983,48 @@ async def handle_callback(_, callback_query: CallbackQuery):
             pass
             
     except Exception as e:
-        logger.error(f"Callback error: {e}", exc_info=True)
+        logger.error("CALLBACK ERROR: {}".format(e), exc_info=True)
         try:
-            await callback_query.answer("❌ Error processing callback")
+            await callback_query.answer("ERROR PROCESSING CALLBACK")
         except:
             pass
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 ARIA2 POWERED BOT STARTING...")
-    print("⚡ MAXIMUM SPEED MODE")
-    print(f"📁 Data Directory: {BASE_DATA_DIR}")
-    print(f"🛠️ Aria2 Available: {ARIA2_AVAILABLE}")
+    print("ARIA2 POWERED BOT STARTING...")
+    print("MAXIMUM SPEED MODE")
+    print("DATA DIRECTORY: {}".format(BASE_DATA_DIR))
+    print("ARIA2 AVAILABLE: {}".format(ARIA2_AVAILABLE))
     print("=" * 60)
     
     # Check dependencies
     try:
         result = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=10)
-        print("✅ yt-dlp OK:", result.stdout.strip())
+        print("YT-DLP OK: {}".format(result.stdout.strip()))
     except:
-        print("📦 Installing yt-dlp...")
+        print("INSTALLING YT-DLP...")
         subprocess.run(["pip", "install", "-q", "yt-dlp"], capture_output=True)
     
     if ARIA2_AVAILABLE:
         try:
             result = subprocess.run(["aria2c", "--version"], capture_output=True, text=True, timeout=10)
-            print("✅ aria2c OK:", result.stdout.split('\n')[0])
+            print("ARIA2C OK: {}".format(result.stdout.split('\n')[0]))
         except:
-            print("❌ aria2c verification failed")
+            print("ARIA2C VERIFICATION FAILED")
     else:
-        print("⚠️  Using fallback downloader (slower but reliable)")
+        print("USING FALLBACK DOWNLOADER (SLOWER BUT RELIABLE)")
     
     # Start web server
-    print("🌐 Starting web server...")
+    print("STARTING WEB SERVER...")
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
     
     # Start bot
-    print("🤖 Starting bot...")
+    print("STARTING BOT...")
     try:
         bot.run()
     except KeyboardInterrupt:
-        print("\n👋 Bot stopped gracefully")
+        print("\nBOT STOPPED GRACEFULLY")
     except Exception as e:
-        print(f"❌ Bot error: {e}")
-        logger.error(f"Bot crash: {e}", exc_info=True)
+        print("BOT ERROR: {}".format(e))
+        logger.error("BOT CRASH: {}".format(e), exc_info=True)

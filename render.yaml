@@ -3,14 +3,9 @@ services:
   type: web
   env: python
   buildCommand: |
-    # Install aria2 with explicit error handling
     apt-get update --fix-missing
-    apt-get install -y --no-install-recommends aria2 2>&1 | tee /tmp/apt.log
-    if ! dpkg -l | grep -q aria2; then
-      echo "❌ ARIA2 INSTALLATION FAILED!" | tee -a /tmp/apt.log
-      exit 1
-    fi
-    aria2c --version
+    apt-get install -y --no-install-recommends aria2
+    aria2c --version || (echo "ARIA2 INSTALL FAILED" && exit 1)
     pip install --no-cache-dir -r requirements.txt
   startCommand: python bot.py
   plan: free

@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import math
 import time
@@ -17,24 +18,69 @@ from pyrogram.errors import MessageNotModified, FloodWait
 from PIL import Image
 
 # ============================================
-# CONFIGURATION
+# CONFIGURATION - FIXED FOR RENDER.COM
 # ============================================
 API_ID = 2819362
 API_HASH = "578ce3d09fadd539544a327c45b55ee4"
 BOT_TOKEN = "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
 
-# Bot settings - UPDATED PATHS FOR RENDER
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunks
-DOWNLOAD_DIR = "/app/data/downloads"  # FIXED: Use persistent disk path
-JSON_DB_PATH = "/app/data/bot_data.json"  # FIXED: Use persistent disk path
+# Bot settings - FIXED: Use Render's persistent disk path
+BASE_DATA_DIR = "/app/data"  # This is your disk mount point
+DOWNLOAD_DIR = os.path.join(BASE_DATA_DIR, "downloads")
+JSON_DB_PATH = os.path.join(BASE_DATA_DIR, "bot_data.json")
+LOG_FILE_PATH = os.path.join(BASE_DATA_DIR, "bot.log")
 
 # DEFAULT THUMBNAIL
 DEFAULT_THUMB_ID = "AgACAgUAAxkBAAE9vJdpFKHL4lIezMqiAhL4U86UBU9HFAACcg5rGxoHoVRR8Xe3Z3RrUwEAAwIAA20AAzYE"
 
-# Create directories with proper permissions
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-os.makedirs(os.path.dirname(JSON_DB_PATH), exist_ok=True)
+# ============================================
+# ROBUST DIRECTORY SETUP
+# ============================================
+def setup_directories():
+    """Setup directories with fallback for Render.com"""
+    global BASE_DATA_DIR, DOWNLOAD_DIR, JSON_DB_PATH, LOG_FILE_PATH
+    
+    try:
+        # On Render, /app/data should exist from disk mount
+        if not os.path.exists(BASE_DATA_DIR):
+            # Try to create it (should work locally, may fail on Render)
+            os.makedirs(BASE_DATA_DIR, exist_ok=True)
+        
+        # Create subdirectories
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(JSON_DB_PATH), exist_ok=True)
+        
+        # Test write permissions
+        test_file = os.path.join(BASE_DATA_DIR, ".write_test")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        
+        print(f"✅ Using data directory: {BASE_DATA_DIR}")
+        return True
+        
+    except (PermissionError, OSError) as e:
+        print(f"⚠️  Cannot use {BASE_DATA_DIR}: {e}")
+        print("🔄 Falling back to current working directory...")
+        
+        # FALLBACK: Use current directory
+        BASE_DATA_DIR = os.getcwd()
+        DOWNLOAD_DIR = os.path.join(BASE_DATA_DIR, "downloads")
+        JSON_DB_PATH = os.path.join(BASE_DATA_DIR, "bot_data.json")
+        LOG_FILE_PATH = os.path.join(BASE_DATA_DIR, "bot.log")
+        
+        try:
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            os.makedirs(os.path.dirname(JSON_DB_PATH), exist_ok=True)
+            print(f"✅ Using fallback directory: {BASE_DATA_DIR}")
+            return True
+        except Exception as e2:
+            print(f"❌ Fatal: Cannot create directories: {e2}")
+            return False
+
+# Initialize directories BEFORE anything else
+if not setup_directories():
+    sys.exit(1)
 
 # ============================================
 # JSON STORAGE
@@ -89,6 +135,7 @@ class JsonStorage:
     def get_stats(self) -> Dict[str, Any]:
         return self.data["stats"]
 
+# Initialize JSON DB
 json_db = JsonStorage(JSON_DB_PATH)
 
 # ============================================
@@ -98,7 +145,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return {"status": "running", "bot": "URL Uploader Bot", "uptime": time.time()}
+    return {"status": "running", "bot": "URL Uploader Bot"}
 
 @app.route('/health')
 def health():
@@ -129,8 +176,11 @@ bot = Client(
 # ============================================
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler("/app/data/bot.log"), logging.StreamHandler()]
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE_PATH),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -191,7 +241,7 @@ def is_valid_url(url: str) -> bool:
             'workers.dev/',
             'github.com/',
             'gitlab.com/',
-            'animeflix.live/',  # Added more domains
+            'animeflix.live/',
             'filebin.net/',
             'transfer.sh/'
         ]):
@@ -256,7 +306,6 @@ def parse_size(size_str: str) -> int:
 async def download_thumbnail(thumb_id: str, filepath: str) -> bool:
     """Download thumbnail file"""
     try:
-        # Ensure directory exists
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         await bot.download_media(thumb_id, file_name=filepath)
         return os.path.exists(filepath) and os.path.getsize(filepath) > 0
@@ -288,7 +337,7 @@ async def get_user_thumbnail_path(user_id: int) -> Optional[str]:
 # ARIA2 DOWNLOAD FUNCTION - FIXED
 # ============================================
 async def download_with_aria2(url: str, filepath: str, message: Message, filename: str) -> bool:
-    """DOWNLOAD USING ARIA2C - WITH ROBUST ERROR HANDLING"""
+    """DOWNLOAD USING ARIA2C - ROBUST VERSION"""
     try:
         clean_name = clean_filename(filename)
         final_dir = os.path.dirname(filepath)
@@ -297,7 +346,6 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
         # Ensure directory exists
         os.makedirs(final_dir, exist_ok=True)
         
-        # DEBUG: Log the command
         logger.info(f"Starting aria2 download: {url} -> {final_path}")
         
         cmd = [
@@ -333,63 +381,47 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
         start_time = time.time()
         last_update = 0
         
-        # Read output line by line
         while True:
             try:
                 line = await asyncio.wait_for(process.stdout.readline(), timeout=1.0)
                 if not line:
                     break
             except asyncio.TimeoutError:
-                # Check if process is still running
                 if process.returncode is not None:
                     break
                 continue
             
             line = line.decode('utf-8', errors='ignore').strip()
-            logger.debug(f"aria2 output: {line}")
+            logger.debug(f"aria2: {line}")
             
-            # Parse progress with regex
+            # Parse progress
             if "DL:" in line and "%" in line:
                 try:
-                    # Extract percentage
                     percent_match = re.search(r'(\d+\.?\d*)%', line)
                     if percent_match:
                         percent = float(percent_match.group(1))
                         
-                        # Extract downloaded size
                         size_match = re.search(r'([0-9.]+[KMGT]?i?B)\s*/\s*([0-9.]+[KMGT]?i?B)', line)
                         if size_match:
                             downloaded = parse_size(size_match.group(1))
                             total = parse_size(size_match.group(2))
                             
-                            # Extract speed
-                            speed_match = re.search(r'([0-9.]+[KMGT]?i?B/s)', line)
-                            if speed_match:
-                                speed = parse_size(speed_match.group(1).replace('/s', ''))
-                            else:
-                                speed = 0
-                            
-                            # Update progress every 2 seconds
                             if time.time() - last_update > 2:
                                 await progress_callback(downloaded, total, message, start_time, clean_name)
                                 last_update = time.time()
-                                
                 except Exception as e:
-                    logger.error(f"Progress parsing error: {e}")
+                    logger.error(f"Progress parse error: {e}")
                     continue
         
-        # Wait for process to complete
         await process.wait()
         
-        # Check result
         if process.returncode == 0 and os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-            logger.info(f"✅ Aria2 download successful: {final_path}")
+            logger.info(f"✅ Download complete: {final_path}")
             return True
         else:
-            # Get error from stderr
             stderr = await process.stderr.read()
             error = stderr.decode('utf-8', errors='ignore')[:500]
-            logger.error(f"❌ Aria2 download failed: {error}")
+            logger.error(f"❌ Aria2 failed: {error}")
             await message.edit_text(f"❌ Download failed!\n<code>{error}</code>")
             return False
             
@@ -439,7 +471,7 @@ async def download_youtube_video(url: str, format_id: str, filepath: str, messag
             if "download:" in line:
                 try:
                     parts = line.split()
-                    for i, part in enumerate(parts):
+                    for part in parts:
                         if part.endswith('%'):
                             percent = float(part.strip('%'))
                             downloaded = int(percent * 0.01 * MAX_FILE_SIZE)
@@ -516,7 +548,7 @@ async def get_youtube_formats(url: str, message: Message) -> Optional[list]:
         return None
 
 # ============================================
-# PROGRESS BAR - CUSTOM FORMAT
+# PROGRESS BAR
 # ============================================
 async def progress_callback(current: int, total: int, message: Message, start_time: float, filename: str, is_upload: bool = False):
     """CUSTOM PROGRESS BAR"""
@@ -527,7 +559,6 @@ async def progress_callback(current: int, total: int, message: Message, start_ti
             return
             
         speed = current / elapsed if elapsed > 0 else 0
-        
         progress = min(current / total, 1.0)
         percent = progress * 100
         
@@ -554,7 +585,7 @@ async def progress_callback(current: int, total: int, message: Message, start_ti
             f"Thanks for using 👑"
         )
         
-        # Update every 2 seconds to avoid FloodWait
+        # Update every 2 seconds
         if int(elapsed) % 2 == 0:
             try:
                 await message.edit_text(text)
@@ -577,9 +608,7 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         user_id = message.from_user.id
         
         upload_as_doc = json_db.get_setting(user_id, "upload_as_doc", True)
-        
         thumb_path = await get_user_thumbnail_path(user_id)
-        
         clean_name = clean_filename(filename)
         
         lower_name = clean_name.lower()
@@ -630,10 +659,10 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         except:
             pass
         
-        # Clean up file after upload
+        # Clean up
         if os.path.exists(filepath):
             os.remove(filepath)
-            logger.info(f"Cleaned up file: {filepath}")
+            logger.info(f"Cleaned up: {filepath}")
         
         json_db.increment_stats()
         
@@ -674,9 +703,9 @@ async def start_help_command(_, message: Message):
 async def stats_command(_, message: Message):
     """Handle /stats"""
     try:
-        files = os.listdir(DOWNLOAD_DIR)
+        files = [f for f in os.listdir(DOWNLOAD_DIR) if os.path.isfile(os.path.join(DOWNLOAD_DIR, f))]
         total_files = len(files)
-        total_size = sum(os.path.getsize(os.path.join(DOWNLOAD_DIR, f)) for f in files if os.path.isfile(os.path.join(DOWNLOAD_DIR, f)))
+        total_size = sum(os.path.getsize(os.path.join(DOWNLOAD_DIR, f)) for f in files)
         
         try:
             import psutil
@@ -784,7 +813,7 @@ async def handle_direct_url(_, message: Message, url: str, custom_name: Optional
             if path_name and '.' in path_name:
                 filename = urllib.parse.unquote(path_name)
             else:
-                # For seedr.cc and similar, generate a name
+                # Generate name for seedr.cc and similar
                 filename = f"file_{int(time.time())}.mkv"
         
         # Clean filename
@@ -871,23 +900,23 @@ async def handle_callback(_, callback_query: CallbackQuery):
             await callback_query.answer("✅ Thumbnail deleted!")
             await settings_command(_, callback_query.message)
         elif data.startswith("yt_"):
-            # FIXED: Check for reply_to_message
-            if not callback_query.message.reply_to_message:
-                # Try to get URL from message text
-                url = None
-                if callback_query.message.text and "http" in callback_query.message.text:
-                    # Extract URL from message
-                    lines = callback_query.message.text.split('\n')
+            # FIXED: Handle missing reply_to_message
+            url = None
+            if callback_query.message.reply_to_message:
+                url = callback_query.message.reply_to_message.text
+            else:
+                # Try to extract from message text
+                text = callback_query.message.text
+                if text and "http" in text:
+                    lines = text.split('\n')
                     for line in lines:
                         if line.startswith('http'):
                             url = line.strip()
                             break
             
-                if not url:
-                    await callback_query.answer("❌ Original message not found!")
-                    return
-            else:
-                url = callback_query.message.reply_to_message.text
+            if not url:
+                await callback_query.answer("❌ No URL found!")
+                return
             
             parts = data.split("_", 3)
             if len(parts) < 3:
@@ -907,7 +936,8 @@ async def handle_callback(_, callback_query: CallbackQuery):
             success = await download_youtube_video(url, format_id, filepath, status_msg)
             
             if success:
-                await upload_file(filepath, filename, callback_query.message.reply_to_message or callback_query.message, status_msg)
+                target_message = callback_query.message.reply_to_message or callback_query.message
+                await upload_file(filepath, filename, target_message, status_msg)
         
         try:
             await callback_query.answer()
@@ -922,11 +952,11 @@ async def handle_callback(_, callback_query: CallbackQuery):
             pass
 
 if __name__ == "__main__":
-    print("=" * 50)
+    print("=" * 60)
     print("🚀 ARIA2 POWERED BOT STARTING...")
     print("⚡ MAXIMUM SPEED MODE")
-    print("📁 Data Path:", os.path.dirname(JSON_DB_PATH))
-    print("=" * 50)
+    print(f"📁 Data Directory: {BASE_DATA_DIR}")
+    print("=" * 60)
     
     # Check dependencies
     try:
@@ -956,3 +986,4 @@ if __name__ == "__main__":
         print("\n👋 Bot stopped gracefully")
     except Exception as e:
         print(f"❌ Bot error: {e}")
+        logger.error(f"Bot crash: {e}", exc_info=True)

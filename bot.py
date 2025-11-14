@@ -26,8 +26,8 @@ BOT_TOKEN = "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
 # Bot settings
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunks
-DOWNLOAD_DIR = "/app/data/downloads"
-JSON_DB_PATH = "/app/data/bot_data.json"
+DOWNLOAD_DIR = "./data/downloads"
+JSON_DB_PATH = "./data/bot_data.json"
 
 # DEFAULT THUMBNAIL
 DEFAULT_THUMB_ID = "AgACAgUAAxkBAAE9vJdpFKHL4lIezMqiAhL4U86UBU9HFAACcg5rGxoHoVRR8Xe3Z3RrUwEAAwIAA20AAzYE"

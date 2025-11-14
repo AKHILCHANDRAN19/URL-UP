@@ -1,37 +1,22 @@
 # ===============================================================
-# Render Blueprint for the URL Uploader Bot
+# Render Blueprint for the URL Uploader Bot (CORRECTED)
 # ===============================================================
 services:
 - name: url-uploader-bot
-  type: web         # Use 'web' type for the Flask health check to keep the bot alive
-  env: python       # Specify the Python environment
-  plan: free        # Use the Free plan (or starter for more resources)
-  region: frankfurt # Choose a region closest to you or your users
+  type: web
+  env: python
+  plan: free
+  region: frankfurt
 
-  # --- Build and Start Commands ---
-  # This command runs when you deploy or redeploy.
-  # 1. Updates the system's package list.
-  # 2. Installs aria2, the core download utility.
-  # 3. Installs all Python packages from requirements.txt.
   buildCommand: |
     apt-get update && apt-get install -y aria2 && pip install -r requirements.txt
   
-  # This command runs after the build to start the bot.
   startCommand: python bot.py
 
-  # --- Health Check ---
-  # Render will ping this path to make sure your bot is running.
-  # The Flask server in bot.py provides this endpoint.
   healthCheckPath: /health
-
-  # --- Auto-Deploy ---
-  # Automatically redeploy when you push changes to your main branch.
   autoDeploy: true
   branch: main
 
-  # --- Environment Variables ---
-  # IMPORTANT: For better security, move these to the 'Environment' tab
-  # in your Render dashboard after the first deployment.
   envVars:
   - key: API_ID
     value: "2819362"
@@ -40,10 +25,9 @@ services:
   - key: BOT_TOKEN
     value: "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
   
-  # --- Persistent Disk ---
-  # This creates a persistent disk to store your downloads and database.
-  # This data will NOT be lost on restarts or redeploys.
+  # --- CORRECTED DISK PATH ---
+  # This mounts the disk as a 'data' folder inside your project directory.
   disk:
     name: bot-data
-    mountPath: /app/data  # The path where the disk will be available
-    sizeGB: 1             # 1 GB is a good starting size for the free plan
+    mountPath: ./data  # <-- THE CRITICAL FIX IS HERE
+    sizeGB: 1

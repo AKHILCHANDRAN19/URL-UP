@@ -14,7 +14,7 @@ from flask import Flask
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import MessageNotModified, FloodWait
-from PIL import Image  # FIXED: PILLOW IMPORT ADDED
+from PIL import Image
 
 # ============================================
 # CONFIGURATION
@@ -26,8 +26,8 @@ BOT_TOKEN = "8390475015:AAF8dauJYTWFwktTQABzG17_-JTN4r71R3M"
 # Bot settings
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunks
-DOWNLOAD_DIR = "./downloads"
-JSON_DB_PATH = "./bot_data.json"
+DOWNLOAD_DIR = "/app/data/downloads"
+JSON_DB_PATH = "/app/data/bot_data.json"
 
 # DEFAULT THUMBNAIL
 DEFAULT_THUMB_ID = "AgACAgUAAxkBAAE9vJdpFKHL4lIezMqiAhL4U86UBU9HFAACcg5rGxoHoVRR8Xe3Z3RrUwEAAwIAA20AAzYE"
@@ -217,7 +217,7 @@ def is_youtube_url(url: str) -> bool:
         return False
 
 # ============================================
-# ARIA2 DOWNLOAD FUNCTION - HIGH SPEED
+# ARIA2 DOWNLOAD FUNCTION - HIGH SPEED (UPDATED)
 # ============================================
 async def download_with_aria2(url: str, filepath: str, message: Message, filename: str) -> bool:
     """DOWNLOAD USING ARIA2C - MAXIMUM SPEED"""
@@ -225,26 +225,24 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
         clean_name = clean_filename(filename)
         final_path = os.path.join(os.path.dirname(filepath), clean_name)
         
+        # === FIX: Added explicit path and improved arguments for reliability ===
         cmd = [
-            "aria2c",
-            "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "--continue=true",
+            "/usr/bin/aria2c",  # Explicit path to avoid PATH issues on Render/servers
+            "--console-log-level=warn", # Use 'warn' to reduce noise, errors still show
             "--summary-interval=1",
-            f"--dir={os.path.dirname(final_path)}",
-            f"--out={os.path.basename(final_path)}",
-            "--console-log-level=error",
+            # Standard browser User-Agent helps with "file-to-link" bots
+            "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "--check-certificate=false",
+            "--follow-metalink=true", # Crucial for some file-to-link bots
+            "--follow-torrent=true",
             "--max-connection-per-server=16",
-            "--split=16",
             "--min-split-size=1M",
-            "--max-concurrent-downloads=8",
+            "--split=16",
             "--max-tries=10",
             "--retry-wait=5",
-            "--timeout=60",
-            "--check-certificate=false",
-            "--async-dns=false",
-            "--seed-time=0",
-            "--bt-enable-lpd=false",
-            "--bt-max-peers=0",
+            "--continue=true",
+            f"--dir={os.path.dirname(final_path)}",
+            f"--out={os.path.basename(final_path)}",
             url
         ]
         
@@ -257,80 +255,63 @@ async def download_with_aria2(url: str, filepath: str, message: Message, filenam
         start_time = time.time()
         last_update = 0
         
+        # Reading output line-by-line to show progress
         while True:
             line = await process.stdout.readline()
             if not line:
                 break
             
-            line = line.decode().strip()
-            
-            if "DL:" in line and "%" in line:
+            line_str = line.decode('utf-8', 'ignore').strip()
+            # In-progress download summary line from aria2c looks like:
+            # [#d3e02b 2.3MiB/4.9MiB(47%) CN:1 DL:321KiB]
+            if "DL:" in line_str and "%" in line_str:
                 try:
-                    parts = line.split()
-                    percent = 0
-                    downloaded = 0
-                    total = 0
-                    speed = 0
-                    
-                    for i, part in enumerate(parts):
-                        if part.endswith('%'):
-                            percent = float(part.strip('%'))
-                        elif 'MiB' in part or 'GiB' in part:
-                            if '/' in part:
-                                downloaded_str, total_str = part.split('/')
-                                downloaded = parse_size(downloaded_str)
-                                total = parse_size(total_str)
-                        elif 'MiB/s' in part or 'GiB/s' in part:
-                            speed = parse_size(part.replace('/s', ''))
-                    
-                    if time.time() - last_update > 1:
-                        await progress_callback(downloaded, total, message, start_time, clean_name)
-                        last_update = time.time()
-                        
-                except:
-                    pass
+                    if time.time() - last_update > 2: # Update every 2 seconds to avoid flood waits
+                        match = re.search(r'(\d+MiB)/(\d+MiB)\((\d+)%\).*DL:\s*([\d\.]+[KMG]?i?B/s)', line_str)
+                        if match:
+                            downloaded_str, total_str, percent_str, speed_str = match.groups()
+                            downloaded = parse_size(downloaded_str.replace("MiB","MB"))
+                            total = parse_size(total_str.replace("MiB","MB"))
+                            await progress_callback(downloaded, total, message, start_time, clean_name)
+                            last_update = time.time()
+                except Exception:
+                    pass # Ignore progress parsing errors
         
-        await process.wait()
+        # Wait for the process to finish and get the output
+        stdout, stderr = await process.communicate()
         
         if process.returncode == 0 and os.path.exists(final_path):
             return True
         else:
-            _, stderr = await process.communicate()
-            error = stderr.decode()[:200]
-            await message.edit_text(f"❌ Aria2 download failed!\n<code>{error}</code>")
+            # === FIX: Provide DETAILED error message on failure ===
+            error_message = stderr.decode('utf-8', 'ignore').strip()
+            logger.error(f"Aria2 Error: {error_message}")
+            final_error = error_message.split("Exception:")[-1].strip() if "Exception:" in error_message else error_message
+            await message.edit_text(f"❌ <b>Download failed!</b>\n\n<b>Reason:</b>\n<code>{final_error or 'Unknown aria2c error. Check logs.'}</code>")
             return False
             
-    except Exception as e:
-        await message.edit_text(f"❌ Aria2 error: {str(e)}")
+    except FileNotFoundError:
+        logger.error("aria2c executable not found at /usr/bin/aria2c")
+        await message.edit_text("❌ <b>Deployment Error:</b>\n`aria2c` command not found on the server. Please ensure it is installed correctly via `apt-get install aria2`.")
         return False
+    except Exception as e:
+        logger.error(f"Aria2 exception: {e}")
+        await message.edit_text(f"❌ An unexpected error occurred during download: {str(e)}")
+        return False
+
 
 def parse_size(size_str: str) -> int:
     """Parse size string like '1.2GiB' to bytes"""
     try:
-        size_str = size_str.strip()
-        if not size_str:
-            return 0
+        size_str = size_str.strip().upper()
+        if not size_str: return 0
             
-        match = re.match(r'([\d\.]+)\s*([KMGT]i?B)?', size_str)
-        if not match:
-            return 0
-            
-        number = float(match.group(1))
-        unit = match.group(2) or 'B'
-        
-        multipliers = {
-            'B': 1,
-            'KB': 1024,
-            'MB': 1024**2,
-            'GB': 1024**3,
-            'TB': 1024**4,
-            'KiB': 1024,
-            'MiB': 1024**2,
-            'GiB': 1024**3,
-            'TiB': 1024**4
-        }
-        
-        return int(number * multipliers.get(unit, 1))
+        val = float(re.search(r'([\d\.]+)', size_str).group(1))
+        unit = re.search(r'([KMGT])', size_str)
+        unit = unit.group(1) if unit else 'B'
+
+        multipliers = {'B': 1, 'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4}
+        return int(val * multipliers.get(unit, 1))
     except:
         return 0
 
@@ -346,13 +327,14 @@ async def download_thumbnail(thumb_id: str, filepath: str) -> bool:
         return False
 
 async def get_user_thumbnail_path(user_id: int) -> Optional[str]:
-    """Get user's thumbnail path - FIXED: DEFINED HERE"""
+    """Get user's thumbnail path"""
     thumb_id = json_db.get_thumbnail(user_id) or DEFAULT_THUMB_ID
     if not thumb_id:
         return None
     
     thumb_path = os.path.join(DOWNLOAD_DIR, f"{user_id}_thumb.jpg")
     
+    # Re-download if it doesn't exist, to ensure it's always available
     if not os.path.exists(thumb_path):
         success = await download_thumbnail(thumb_id, thumb_path)
         if not success:
@@ -398,15 +380,18 @@ async def download_youtube_video(url: str, format_id: str, filepath: str, messag
                 break
             
             line = line.decode().strip()
-            if "download:" in line:
+            if "[download]" in line and "%" in line:
                 try:
                     parts = line.split()
                     for i, part in enumerate(parts):
                         if part.endswith('%'):
                             percent = float(part.strip('%'))
-                            downloaded = int(percent * 0.01 * MAX_FILE_SIZE)
+                            # This is an approximation as yt-dlp doesn't always give total size
+                            # We'll use a placeholder total size for progress calculation
+                            placeholder_total = 1000 * 1024 * 1024 # Assume 1GB
+                            downloaded = int(percent * 0.01 * placeholder_total)
                             if time.time() - last_update > 2:
-                                await progress_callback(downloaded, MAX_FILE_SIZE, message, start_time, clean_name)
+                                await progress_callback(downloaded, placeholder_total, message, start_time, clean_name)
                                 last_update = time.time()
                 except:
                     pass
@@ -428,21 +413,9 @@ async def download_youtube_video(url: str, format_id: str, filepath: str, messag
 async def get_youtube_formats(url: str, message: Message) -> Optional[list]:
     """Get YouTube formats"""
     try:
-        cmd = [
-            "yt-dlp",
-            "-j",
-            "--no-warnings",
-            "--no-check-certificate",
-            "--no-playlist",
-            url
-        ]
+        cmd = ["yt-dlp", "-j", "--no-warnings", "--no-check-certificate", "--no-playlist", url]
         
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
+        process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await process.communicate()
         
         if process.returncode != 0:
@@ -454,22 +427,18 @@ async def get_youtube_formats(url: str, message: Message) -> Optional[list]:
         
         formats = []
         for f in data.get("formats", []):
-            if f.get("vcodec") != "none" and f.get("acodec") != "none":
+            if f.get("vcodec") != "none": # simplified to check for video stream
                 format_id = f.get("format_id", "")
                 ext = f.get("ext", "mp4")
                 height = f.get("height", 0)
                 filesize = f.get("filesize", 0) or f.get("filesize_approx", 0)
                 
                 if height and height >= 360:
-                    formats.append({
-                        "id": format_id,
-                        "ext": ext,
-                        "quality": f"{height}p",
-                        "size": filesize
-                    })
+                    formats.append({"id": format_id, "ext": ext, "quality": f"{height}p", "size": filesize})
         
-        formats.sort(key=lambda x: x.get('height', 0), reverse=True)
-        return formats[:5]
+        unique_formats = {f['quality']: f for f in formats}.values()
+        sorted_formats = sorted(list(unique_formats), key=lambda x: int(x['quality'][:-1]), reverse=True)
+        return sorted_formats[:5]
     
     except Exception as e:
         logger.error(f"Format fetch error: {e}")
@@ -484,45 +453,40 @@ async def progress_callback(current: int, total: int, message: Message, start_ti
     try:
         now = time.time()
         elapsed = now - start_time
-        if elapsed < 0.1:
-            return
+        if elapsed < 1: return
             
-        speed = current / elapsed if elapsed > 0 else 0
-        
-        progress = min(current / total, 1.0)
+        speed = current / elapsed
+        progress = min(current / total, 1.0) if total > 0 else 0
         percent = progress * 100
         
-        if progress > 0:
-            eta_seconds = (total - current) / speed if speed > 0 else 0
+        eta = "N/A"
+        if progress > 0 and speed > 0:
+            eta_seconds = (total - current) / speed
             minutes, seconds = divmod(int(eta_seconds), 60)
-            eta = f"{minutes}m, {seconds}s" if minutes > 0 else f"{seconds}s"
-        else:
-            eta = "N/A"
+            eta = f"{minutes}m {seconds}s"
         
         bar_length = 10
         filled = int(bar_length * progress)
-        bar = "▪" * filled + "▫" * (bar_length - filled)
+        bar = "▰" * filled + "▱" * (bar_length - filled)
         
-        action = "Uploading" if is_upload else "Downloading"
+        action = "⏫ Uploading" if is_upload else "⏬ Downloading"
         
         text = (
-            f"{action}: <b>{percent:.2f}%</b>\n"
-            f"[{bar}]\n"
-            f"<code>{sizeof_fmt(current)} of {sizeof_fmt(total)}</code>\n"
-            f"Speed: <code>{sizeof_fmt(speed)}/sec</code>\n"
-            f"ETA: <code>{eta}</code>\n\n"
-            f"📁 <b>{filename}</b>\n\n"
-            f"Thanks for using 👑"
+            f"<b>{action}:</b>\n"
+            f"<code>{filename}</code>\n\n"
+            f"<b>[{bar}] {percent:.1f}%</b>\n"
+            f"{sizeof_fmt(current)} of {sizeof_fmt(total)}\n"
+            f"<b>Speed:</b> {sizeof_fmt(speed)}/s\n"
+            f"<b>ETA:</b> {eta}"
         )
         
-        if int(elapsed) % 2 == 0:
-            try:
-                await message.edit_text(text)
-            except:
-                pass
+        await message.edit_text(text)
             
-    except:
+    except MessageNotModified:
         pass
+    except Exception as e:
+        logger.warning(f"Progress callback error: {e}")
+
 
 # ============================================
 # UPLOAD FUNCTION
@@ -547,55 +511,39 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
         
         await status_msg.edit_text(f"📤 Uploading...\n<b>{clean_name}</b>")
         
+        progress_args = {
+            "message": status_msg,
+            "start_time": start_time,
+            "filename": clean_name,
+            "is_upload": True
+        }
+
         if is_image:
-            await bot.send_photo(
-                chat_id=message.chat.id,
-                photo=filepath,
-                caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}"
-            )
+            await bot.send_photo(chat_id=message.chat.id, photo=filepath, caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}")
         elif is_audio:
-            await bot.send_audio(
-                chat_id=message.chat.id,
-                audio=filepath,
-                caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}",
-                thumb=thumb_path,
-                progress=progress_callback,
-                progress_args=(status_msg, start_time, clean_name, True)
-            )
+            await bot.send_audio(chat_id=message.chat.id, audio=filepath, caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}", thumb=thumb_path, progress=progress_callback, progress_args=list(progress_args.values()))
         elif is_video and not upload_as_doc:
-            await bot.send_video(
-                chat_id=message.chat.id,
-                video=filepath,
-                caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}",
-                supports_streaming=True,
-                thumb=thumb_path,
-                progress=progress_callback,
-                progress_args=(status_msg, start_time, clean_name, True)
-            )
+            await bot.send_video(chat_id=message.chat.id, video=filepath, caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}", supports_streaming=True, thumb=thumb_path, progress=progress_callback, progress_args=list(progress_args.values()))
         else:
-            await bot.send_document(
-                chat_id=message.chat.id,
-                document=filepath,
-                caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}",
-                thumb=thumb_path,
-                file_name=clean_name,
-                progress=progress_callback,
-                progress_args=(status_msg, start_time, clean_name, True)
-            )
+            await bot.send_document(chat_id=message.chat.id, document=filepath, caption=f"✅ <b>{clean_name}</b>\n📦 {sizeof_fmt(file_size)}", thumb=thumb_path, file_name=clean_name, progress=progress_callback, progress_args=list(progress_args.values()))
         
-        try:
-            await status_msg.delete()
-        except:
-            pass
+        await status_msg.delete()
         
         if os.path.exists(filepath):
             os.remove(filepath)
+        if thumb_path and os.path.exists(thumb_path) and f"{user_id}_thumb.jpg" in thumb_path:
+             try: os.remove(thumb_path) # Clean up downloaded thumb
+             except: pass
         
         json_db.increment_stats()
         
     except Exception as e:
         logger.error(f"Upload error: {e}")
         await status_msg.edit_text(f"❌ Upload failed: {str(e)}")
+    finally:
+        # Final cleanup
+        if os.path.exists(filepath):
+            os.remove(filepath)
 
 # ============================================
 # HANDLERS
@@ -604,22 +552,19 @@ async def upload_file(filepath: str, filename: str, message: Message, status_msg
 async def start_help_command(_, message: Message):
     """Handle /start and /help"""
     text = (
-        "👑 <b>ARIA2 POWERED BOT</b>\n\n"
+        "👑 <b>URL Uploader Bot (Aria2 Powered)</b>\n\n"
+        "Send me any direct HTTP/HTTPS link and I will download and upload it for you.\n\n"
         "<b>Features:</b>\n"
-        "• ⚡ Ultra-fast downloads (aria2c)\n"
-        "• 16 connections per server\n"
-        "• Custom thumbnails\n"
-        "• Clean filenames\n"
-        "• Progress tracking\n\n"
-        "<b>Commands:</b>\n"
-        "/stats - Bot statistics\n"
-        "/settings - Configure settings\n"
-        "Send any URL to start!"
+        "• ⚡ Ultra-fast downloads with `aria2c`\n"
+        "• 📺 YouTube video download support\n"
+        "• 🖼️ Custom thumbnails\n"
+        "• 📑 Clean filenames and progress tracking\n\n"
+        "<b>How to use:</b>\n"
+        "1. Send an image to set it as a thumbnail.\n"
+        "2. Send a direct download link.\n"
+        "3. For custom filename, send link in format: `URL | new name.ext`"
     )
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stats", callback_data="stats"),
-         InlineKeyboardButton("⚙️ Settings", callback_data="settings")]
-    ])
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Settings", callback_data="settings"), InlineKeyboardButton("📊 Stats", callback_data="stats")]])
     await message.reply_text(text, reply_markup=buttons)
 
 @bot.on_message(filters.command("stats") & filters.private)
@@ -627,7 +572,6 @@ async def stats_command(_, message: Message):
     """Handle /stats"""
     try:
         files = os.listdir(DOWNLOAD_DIR)
-        total_files = len(files)
         total_size = sum(os.path.getsize(os.path.join(DOWNLOAD_DIR, f)) for f in files)
         
         try:
@@ -635,257 +579,179 @@ async def stats_command(_, message: Message):
             cpu = psutil.cpu_percent()
             ram = psutil.virtual_memory().percent
             disk = psutil.disk_usage('/').percent
-        except:
+        except ImportError:
             cpu = ram = disk = "N/A"
         
         stats = json_db.get_stats()
-        downloads = stats["total_downloads"]
-        
         text = (
-            "📊 <b>Statistics</b>\n\n"
-            f"├ <b>Downloads:</b> {downloads}\n"
-            f"├ <b>Cache:</b> {sizeof_fmt(total_size)}\n"
-            f"├ <b>CPU:</b> {cpu}%\n"
-            f"├ <b>RAM:</b> {ram}%\n"
-            f"└ <b>Disk:</b> {disk}%"
+            "📊 <b>Bot Statistics</b>\n\n"
+            f"├ <b>Total Downloads:</b> {stats['total_downloads']}\n"
+            f"├ <b>Cached Files Size:</b> {sizeof_fmt(total_size)}\n"
+            f"├ <b>CPU Usage:</b> {cpu}%\n"
+            f"├ <b>RAM Usage:</b> {ram}%\n"
+            f"└ <b>Disk Usage:</b> {disk}%"
         )
         await message.reply_text(text)
-    except:
-        await message.reply_text("❌ Error fetching stats")
+    except Exception as e:
+        await message.reply_text(f"❌ Error fetching stats: {e}")
 
 @bot.on_message(filters.command("settings") & filters.private)
 async def settings_command(_, message: Message):
     """Handle /settings"""
-    try:
-        user_id = message.from_user.id
-        upload_as_doc = json_db.get_setting(user_id, "upload_as_doc", True)
-        
-        mode = "📁 Document (file)" if upload_as_doc else "📹 Video (streaming)"
-        text = f"⚙️ <b>Settings</b>\n\n<b>Upload Mode:</b> {mode}"
-        
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Toggle Upload Mode", callback_data="toggle_upload")],
-            [InlineKeyboardButton("Delete Thumbnail", callback_data="del_thumb")],
-            [InlineKeyboardButton("Close", callback_data="close")]
-        ])
-        
-        await message.reply_text(text, reply_markup=buttons)
-    except:
-        await message.reply_text("❌ Error loading settings")
+    user_id = message.from_user.id
+    upload_as_doc = json_db.get_setting(user_id, "upload_as_doc", True)
+    mode = "📁 Document" if upload_as_doc else "📹 Video (Streamable)"
+    
+    text = f"⚙️ <b>Settings</b>\n\nYour current upload mode is set to: <b>{mode}</b>."
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Toggle Upload Mode", callback_data="toggle_upload")],
+        [InlineKeyboardButton("🗑️ Delete Thumbnail", callback_data="del_thumb")],
+        [InlineKeyboardButton("✖️ Close", callback_data="close")]
+    ])
+    await message.reply_text(text, reply_markup=buttons)
 
 @bot.on_message(filters.photo & filters.private)
 async def save_thumbnail(_, message: Message):
     """Save custom thumbnail"""
-    try:
-        user_id = message.from_user.id
-        file_id = message.photo.file_id
-        
-        json_db.set_thumbnail(user_id, file_id)
-        await message.reply_text("✅ Thumbnail saved!\n\nWill be used for all video/file uploads.")
-    except:
-        await message.reply_text("❌ Failed to save thumbnail")
+    user_id = message.from_user.id
+    file_id = message.photo.file_id
+    json_db.set_thumbnail(user_id, file_id)
+    await message.reply_text("✅ Thumbnail saved successfully!", quote=True)
 
 @bot.on_message(filters.text & filters.private)
 async def handle_url(_, message: Message):
     """Handle URL"""
     try:
         url = message.text.strip()
-        
-        if not url or len(url) < 10:
-            await message.reply_text("❌ Invalid URL!")
+        if not is_valid_url(url.split('|')[0].strip()):
+            await message.reply_text("❌ This doesn't look like a valid URL. Please send a valid direct download link.")
             return
         
-        # Parse custom filename
         custom_name = None
         if "|" in url:
-            parts = url.split("|", 1)
-            url = parts[0].strip()
-            custom_name = parts[1].strip()
-            if not custom_name:
-                custom_name = None
-        
-        if not is_valid_url(url):
-            await message.reply_text("❌ Invalid URL format!")
-            return
+            url, custom_name = map(str.strip, url.split("|", 1))
         
         if is_youtube_url(url):
-            await handle_youtube_url(_, message, url, custom_name)
+            await handle_youtube_url(bot, message, url, custom_name)
         else:
-            await handle_direct_url(_, message, url, custom_name)
+            await handle_direct_url(bot, message, url, custom_name)
             
     except Exception as e:
         logger.error(f"URL handler error: {e}")
-        await message.reply_text("❌ Error processing URL")
+        await message.reply_text("❌ An error occurred while processing your URL.")
 
 async def handle_direct_url(_, message: Message, url: str, custom_name: Optional[str]):
     """Handle direct download - NOW USES ARIA2"""
-    status_msg = None
+    status_msg = await message.reply_text("🔍 Analyzing URL...", quote=True)
     try:
-        status_msg = await message.reply_text("🔍 Processing URL...")
-        
-        # Get filename
-        parsed_url = urllib.parse.urlparse(url)
-        
-        if custom_name:
-            filename = custom_name
-        else:
-            path_name = os.path.basename(parsed_url.path)
-            if path_name and '.' in path_name:
-                filename = urllib.parse.unquote(path_name)
-            else:
-                filename = "file.mkv"
-        
-        # Clean filename
+        filename = custom_name or os.path.basename(urllib.parse.urlparse(url).path) or f"download_{int(time.time())}"
         clean_name = clean_filename(filename)
         
-        # Show filename
-        await status_msg.edit_text(f"📥 Downloading...\n<b>{clean_name}</b>")
+        await status_msg.edit_text(f"📥 Preparing to download...\n<b>{clean_name}</b>")
         
-        # Use ARIA2 for download
         filepath = os.path.join(DOWNLOAD_DIR, clean_name)
         success = await download_with_aria2(url, filepath, status_msg, clean_name)
         
-        if success:
+        if success and os.path.exists(filepath):
             await upload_file(filepath, clean_name, message, status_msg)
+        elif not success and await status_msg.get_edit_date():
+             # If download_with_aria2 already sent an error, don't send another one
+             pass
         else:
-            await status_msg.edit_text("❌ Download failed!")
+             await status_msg.edit_text("❌ Download failed! Please check the link and try again.")
         
     except Exception as e:
         logger.error(f"Direct URL error: {e}")
-        if status_msg:
-            await status_msg.edit_text(f"❌ Error: {str(e)}")
+        await status_msg.edit_text(f"❌ An error occurred: {str(e)}")
 
 async def handle_youtube_url(_, message: Message, url: str, custom_name: Optional[str]):
     """Handle YouTube URL"""
-    status_msg = None
+    status_msg = await message.reply_text("🔍 Fetching YouTube video info...", quote=True)
     try:
-        status_msg = await message.reply_text("🔍 Fetching video info...")
-        
         formats = await get_youtube_formats(url, status_msg)
-        
         if not formats:
             return
         
-        # Show format selection
         buttons = []
-        for f in formats[:5]:
-            size_str = sizeof_fmt(f['size']) if f['size'] else "Unknown"
+        for f in formats:
+            size_str = sizeof_fmt(f['size']) if f['size'] else "N/A"
             btn_text = f"📹 {f['quality']} ({size_str})"
             callback_data = f"yt_{f['id']}_{f['ext']}_{custom_name or 'video'}"
             buttons.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
         
-        buttons.append([InlineKeyboardButton("🔒 Close", callback_data="close")])
-        
-        await status_msg.edit_text(
-            "🎬 <b>Select Quality:</b>",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
+        buttons.append([InlineKeyboardButton("✖️ Close", callback_data="close")])
+        await status_msg.edit_text("🎬 <b>Select Video Quality:</b>", reply_markup=InlineKeyboardMarkup(buttons))
         
     except Exception as e:
         logger.error(f"YouTube handler error: {e}")
-        if status_msg:
-            await status_msg.edit_text("❌ Error processing YouTube URL")
+        await status_msg.edit_text("❌ Error processing YouTube URL.")
 
 @bot.on_callback_query()
-async def handle_callback(_, callback_query: CallbackQuery):
+async def handle_callback(_, cb: CallbackQuery):
     """Handle callbacks"""
+    data = cb.data
+    user_id = cb.from_user.id
+    
     try:
-        data = callback_query.data
-        user_id = callback_query.from_user.id
-        
-        if data == "help":
-            await start_help_command(_, callback_query.message)
+        if data == "settings":
+            await settings_command(bot, cb.message)
         elif data == "stats":
-            await stats_command(_, callback_query.message)
-        elif data == "settings":
-            await settings_command(_, callback_query.message)
+            await stats_command(bot, cb.message)
         elif data == "close":
-            try:
-                await callback_query.message.delete()
-            except:
-                pass
+            await cb.message.delete()
         elif data == "toggle_upload":
             current = json_db.get_setting(user_id, "upload_as_doc", True)
             json_db.set_setting(user_id, "upload_as_doc", not current)
-            mode = "📹 Video" if not current else "📁 Document"
-            await callback_query.answer(f"✅ Mode: {mode}")
-            await settings_command(_, callback_query.message)
+            mode = "📹 Video" if current else "📁 Document" # Note: logic is reversed, if it WAS doc, it's now video
+            await cb.answer(f"✅ Upload mode changed to {mode}", show_alert=True)
+            await settings_command(bot, cb.message)
         elif data == "del_thumb":
             json_db.delete_thumbnail(user_id)
-            await callback_query.answer("✅ Thumbnail deleted!")
-            await settings_command(_, callback_query.message)
+            await cb.answer("✅ Custom thumbnail deleted!", show_alert=True)
+            await settings_command(bot, cb.message)
         elif data.startswith("yt_"):
-            if not callback_query.message.reply_to_message:
-                await callback_query.answer("❌ Original message not found!")
+            if not cb.message.reply_to_message:
+                await cb.answer("❌ Original message not found!", show_alert=True)
                 return
             
-            url = callback_query.message.reply_to_message.text
-            if not url:
-                await callback_query.answer("❌ No URL found!")
-                return
+            url = cb.message.reply_to_message.text.split('|')[0].strip()
             
             parts = data.split("_", 3)
-            if len(parts) < 3:
-                return
-            
-            format_id = parts[1]
-            ext = parts[2]
+            format_id, ext = parts[1], parts[2]
             custom_name = parts[3] if len(parts) > 3 and parts[3] != 'video' else None
             
-            await callback_query.answer("📥 Downloading...")
+            await cb.message.edit_text("📥 Download starting...")
             
-            status_msg = callback_query.message
+            status_msg = cb.message
             filename = custom_name or f"youtube_video_{int(time.time())}.{ext}"
             filepath = os.path.join(DOWNLOAD_DIR, filename)
             
             success = await download_youtube_video(url, format_id, filepath, status_msg)
             
             if success:
-                await upload_file(filepath, filename, callback_query.message.reply_to_message, status_msg)
+                await upload_file(filepath, filename, cb.message.reply_to_message, status_msg)
         
-        try:
-            await callback_query.answer()
-        except:
-            pass
-            
+        await cb.answer()
     except Exception as e:
         logger.error(f"Callback error: {e}")
-        try:
-            await callback_query.answer("❌ Error")
-        except:
-            pass
+        await cb.answer("❌ An error occurred.", show_alert=True)
 
 if __name__ == "__main__":
     print("=" * 50)
     print("🚀 ARIA2 POWERED BOT STARTING...")
-    print("⚡ MAXIMUM SPEED MODE")
     print("=" * 50)
     
-    # Check dependencies
     try:
-        subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=10)
-        print("✅ yt-dlp OK")
-    except:
-        print("📦 Installing yt-dlp...")
-        subprocess.run(["pip", "install", "-q", "yt-dlp"], capture_output=True)
-    
-    try:
-        subprocess.run(["aria2c", "--version"], capture_output=True, text=True, timeout=10)
-        print("✅ aria2c OK")
-    except:
-        print("❌ aria2c NOT FOUND!")
-        print("Install on Render: apt-get install aria2")
-    
-    # Start web server
+        result = subprocess.run(["/usr/bin/aria2c", "--version"], capture_output=True, text=True, check=True)
+        print(f"✅ aria2c found: {result.stdout.splitlines()[0]}")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("❌ CRITICAL: aria2c NOT FOUND at /usr/bin/aria2c!")
+        print("Install on Render/Debian: apt-get update && apt-get install -y aria2")
+        exit(1) # Exit if aria2c is missing
+
     print("🌐 Starting web server...")
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
     
-    # Start bot
     print("🤖 Starting bot...")
-    try:
-        bot.run()
-    except KeyboardInterrupt:
-        print("\n👋 Bot stopped")
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    bot.run()

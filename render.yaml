@@ -3,12 +3,11 @@ services:
   type: web
   env: python
   buildCommand: |
-    # Force update and install with explicit error checking
+    # Install aria2 with explicit error handling
     apt-get update --fix-missing
-    apt-get install -y --no-install-recommends aria2
-    # Verify installation
-    if ! command -v aria2c &> /dev/null; then
-      echo "❌ ARIA2 INSTALLATION FAILED!"
+    apt-get install -y --no-install-recommends aria2 2>&1 | tee /tmp/apt.log
+    if ! dpkg -l | grep -q aria2; then
+      echo "❌ ARIA2 INSTALLATION FAILED!" | tee -a /tmp/apt.log
       exit 1
     fi
     aria2c --version

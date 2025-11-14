@@ -2,7 +2,9 @@ services:
 - name: url-uploader-bot
   type: web
   env: python
-  buildCommand: pip install -r requirements.txt
+  buildCommand: |
+    apt-get update && apt-get install -y aria2
+    pip install -r requirements.txt
   startCommand: python bot.py
   plan: free
   healthCheckPath: /health
